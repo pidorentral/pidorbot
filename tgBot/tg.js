@@ -2,11 +2,15 @@ import { Telegraf, Markup } from 'telegraf';
 import { getConfig } from './config.js';
 import {
   addAccount,
+  attachMafileToAccount,
   getAccounts,
   getAccountById,
   getActiveRentals,
   getOrders,
   getStats,
+  setAccountStatus,
+  deleteAccount,
+  updateAccount,
 } from './services/rentalStore.js';
 import { parseMafile } from '../steam/mafile.js';
 import { generateSteamGuardCode } from '../steam/steamGuard.js';
@@ -19,6 +23,41 @@ const COMMANDS = [
   { command: 'orders', description: 'Orders list' },
   { command: 'settings', description: 'Bot settings' },
 ];
+
+// Handlers must be defined before createBot registers them.
+async function showActiveRentals(ctx) {
+  const rentals = await getActiveRentals();
+
+  if (!rentals || rentals.length === 0) {
+    await answer(ctx, 'No active rentals.');
+    return;
+  }
+
+  await answer(ctx, [
+    'Active rentals',
+    '',
+    ...rentals.map((r) => `#${r.id} account #${r.accountId}\nBuyer: ${r.buyer}\nUntil: ${r.endsAt}`),
+  ].join('\n\n'));
+}
+
+async function showOrders(ctx) {
+  const orders = await getOrders();
+
+  if (!orders || orders.length === 0) {
+    await answer(ctx, 'No orders yet.');
+    return;
+  }
+
+  await answer(ctx, [
+    'Orders',
+    '',
+    ...orders.map((o) => `#${o.id} ${o.status} ${o.funpayOrderId || ''}`),
+  ].join('\n'));
+}
+
+async function showSettings(ctx) {
+  await answer(ctx, ['Settings', '', 'No configurable settings yet.'].join('\n'));
+}
 
 export function createBot(config = getConfig()) {
   const bot = new Telegraf(config.botToken);
@@ -58,27 +97,27 @@ export function createBot(config = getConfig()) {
   bot.action('settings', showSettings);
   bot.action(/^acc_code:(\d+)$/, async (ctx) => {
     const accountId = Number(ctx.match[1]);
-    const account = getAccountById(accountId);
+    const account = await getAccountById(accountId, { includeSecrets: true });
 
     if(!account) {
-      await ctx.answerCbQuery('Account not found');
+      await safeAnswerCb(ctx, 'Account not found');
       return ctx.editMessageText('Account not found');
     }
 
     if (!account.sharedSecret) {
-      return ctx.answerCbQuery('Steam Guard is not connected');
+      return safeAnswerCb(ctx, 'Steam Guard is not connected');
     }
 
-    const code = generateSteamGuardCode(account.sharedSecret)
+    const code = generateSteamGuardCode(account.sharedSecret);
 
-    await ctx.answerCbQuery();
-    return ctx.reply(code)
-  })
+    await safeAnswerCb(ctx);
+    return ctx.reply(code);
+  });
 
   bot.action('accs_back', async (ctx) => {
-    const accounts = getAccounts();
+    const accounts = await getAccounts();
 
-    await ctx.answerCbQuery();
+    await safeAnswerCb(ctx);
 
     if (accounts.length === 0) {
       return ctx.editMessageText(
@@ -98,44 +137,49 @@ export function createBot(config = getConfig()) {
     const session = sessions.get(ctx.from.id);
 
     if(!session || session.flow !== 'add_account') {
-      return ctx.answerCbQuery('No active add account flow pizdabol')
+      return safeAnswerCb(ctx, 'No active add account flow pizdabol')
     }
 
-    const account = addAccount({
+    const account = await addAccount({
       title: session.data.title,
       login: session.data.login,
       password: session.data.password,
-      sharedSecret: session.data.sharedSecret,
-      identitySecret: session.data.identitySecret,
-      steamId: session.data.steamId,
-      accountName: session.data.accountName,
-    })
+      notes: null,
+    });
 
-    console.log(account)
+    if (session.data.sharedSecret) {
+      await attachMafileToAccount(account.id, {
+        sharedSecret: session.data.sharedSecret,
+        identitySecret: session.data.identitySecret,
+        rawJson: session.data.raw,
+      });
+    }
+
+    //console.log(account)
 
     sessions.delete(ctx.from.id);
 
-    await ctx.answerCbQuery();
+    await safeAnswerCb(ctx);
     return ctx.editMessageText(`Account #${account.id} added`)
   });
 
   bot.action('add_acc_cancel', async (ctx) => {
     sessions.delete(ctx.from.id);
 
-    await ctx.answerCbQuery()
+    await safeAnswerCb(ctx)
     return ctx.editMessageText('Account adding canceled')
   });
 
   bot.action(/^acc_open:(\d+)$/, async (ctx) => {
     const accountId = Number(ctx.match[1]);
-    const account = getAccountById(accountId);
+    const account = await getAccountById(accountId, { includeSecrets: true });
 
     if (!account) {
-      await ctx.answerCbQuery('Account not found.');
+      await safeAnswerCb(ctx, 'Account not found.');
       return ctx.editMessageText('Account not found.');
     }
 
-    await ctx.answerCbQuery();
+    await safeAnswerCb(ctx);
 
     return ctx.editMessageText(
       formatAccountCard(account),
@@ -146,34 +190,155 @@ export function createBot(config = getConfig()) {
 
   bot.action(/^acc_password:(\d+)$/, async (ctx) => {
     const accountId = Number(ctx.match[1]);
-    const account = getAccountById(accountId);
+    const account = await getAccountById(accountId, { includeSecrets: true });
 
     if (!account) {
-      await ctx.answerCbQuery('Account not found.');
+      await safeAnswerCb(ctx, 'Account not found.');
       return ctx.editMessageText('Account not found.');
     }
 
-    console.log(`Admin ${ctx.from.id} viewed password for account #${account.id}`)
+    console.log(`Admin ${ctx.from.id} viewed password for account #${account.id}`);
 
-    await ctx.answerCbQuery();
+    await safeAnswerCb(ctx);
 
     return ctx.editMessageText(
-      formatAccountCard(account, { showPassword: true}),
+      formatAccountCard(account, { showPassword: true }),
       accountCardKeyboard(account),
     );
+  });
+
+  // Disable / enable flow: ask for confirmation
+  bot.action(/^acc_disable:(\d+)$/, async (ctx) => {
+    const accountId = Number(ctx.match[1]);
+    const account = await getAccountById(accountId, { includeSecrets: true });
+    await safeAnswerCb(ctx);
+
+    if (account?.status === 'disabled') {
+      return ctx.editMessageText(
+        'Enable this account again?',
+        confirmKeyboard('acc_enable', accountId),
+      );
     }
-  );
+
+    return ctx.editMessageText(
+      'Disable this account? It will become inactive and unusable until enabled.',
+      confirmKeyboard('acc_disable', accountId),
+    );
+  });
+
+  bot.action(/^acc_disable_confirm:(\d+)$/, async (ctx) => {
+    const accountId = Number(ctx.match[1]);
+    await safeAnswerCb(ctx);
+    await setAccountStatus(accountId, 'disabled');
+    const account = await getAccountById(accountId, { includeSecrets: true });
+    return ctx.editMessageText(
+      formatAccountCard(account),
+      accountCardKeyboard(account),
+    );
+  });
+
+  bot.action(/^acc_enable_confirm:(\d+)$/, async (ctx) => {
+    const accountId = Number(ctx.match[1]);
+    await safeAnswerCb(ctx);
+    await setAccountStatus(accountId, 'available');
+    const account = await getAccountById(accountId, { includeSecrets: true });
+    return ctx.editMessageText(
+      formatAccountCard(account),
+      accountCardKeyboard(account),
+    );
+  });
+
+  bot.action(/^acc_disable_cancel:(\d+)$/, async (ctx) => {
+    const accountId = Number(ctx.match[1]);
+    await safeAnswerCb(ctx);
+    const account = await getAccountById(accountId, { includeSecrets: true });
+    return ctx.editMessageText(formatAccountCard(account), accountCardKeyboard(account));
+  });
+
+  bot.action(/^acc_enable_cancel:(\d+)$/, async (ctx) => {
+    const accountId = Number(ctx.match[1]);
+    await safeAnswerCb(ctx);
+    const account = await getAccountById(accountId, { includeSecrets: true });
+    return ctx.editMessageText(formatAccountCard(account), accountCardKeyboard(account));
+  });
+
+  // Delete flow: confirmation required
+  bot.action(/^acc_delete:(\d+)$/, async (ctx) => {
+    const accountId = Number(ctx.match[1]);
+    await safeAnswerCb(ctx);
+    return ctx.editMessageText('Delete this account? This action cannot be undone.', confirmKeyboard('acc_delete', accountId));
+  });
+
+  bot.action(/^acc_delete_confirm:(\d+)$/, async (ctx) => {
+    const accountId = Number(ctx.match[1]);
+    await safeAnswerCb(ctx);
+    await deleteAccount(accountId);
+    return ctx.editMessageText(`Account #${accountId} deleted.`, mainMenu());
+  });
+
+  bot.action(/^acc_delete_cancel:(\d+)$/, async (ctx) => {
+    const accountId = Number(ctx.match[1]);
+    await safeAnswerCb(ctx);
+    const account = await getAccountById(accountId, { includeSecrets: true });
+    return ctx.editMessageText(formatAccountCard(account), accountCardKeyboard(account));
+  });
+
+  // Add mafile quick flow
+  bot.action(/^acc_add_mafile:(\d+)$/, async (ctx) => {
+    const accountId = Number(ctx.match[1]);
+    sessions.set(ctx.from.id, { flow: 'add_mafile', step: 'mafile', accountId, data: {} });
+    await safeAnswerCb(ctx);
+    return ctx.reply('Send mafile JSON text:');
+  });
+
+  // Edit flow: start interactive edit
+  bot.action(/^acc_edit:(\d+)$/, async (ctx) => {
+    const accountId = Number(ctx.match[1]);
+    const account = await getAccountById(accountId);
+    sessions.set(ctx.from.id, {
+      flow: 'edit_account',
+      step: 'title',
+      accountId,
+      data: { title: account.title, login: account.login, password: null, notes: account.notes },
+    });
+    await safeAnswerCb(ctx);
+    return ctx.reply(`Editing account #${accountId}. Enter new title (current: ${account.title}):`);
+  });
+
+  bot.action('edit_acc_save', async (ctx) => {
+    await safeAnswerCb(ctx);
+    const session = sessions.get(ctx.from.id);
+    if (!session || session.flow !== 'edit_account') {
+      return ctx.reply('No edit session found.');
+    }
+    const updates = {};
+    if (session.data.title) updates.title = session.data.title;
+    if (session.data.login) updates.login = session.data.login;
+    if (session.data.password && session.data.password.length > 0) updates.password = session.data.password;
+    if (session.data.notes !== undefined) updates.notes = session.data.notes;
+
+    await updateAccount(session.accountId, updates);
+    sessions.delete(ctx.from.id);
+    const account = await getAccountById(session.accountId);
+    return ctx.reply('Account updated.', accountCardKeyboard(account));
+  });
+
+  bot.action('edit_acc_cancel', async (ctx) => {
+    await safeAnswerCb(ctx);
+    sessions.delete(ctx.from.id);
+    return ctx.reply('Edit cancelled.');
+  });
 
   bot.action('add_acc_mafile_yes', async (ctx) => {
     const session = sessions.get(ctx.from.id);
 
     if (!session || session.flow !== 'add_account') {
-      return ctx.answerCbQuery('No active add account flow');
+      return safeAnswerCb(ctx, 'No active add account flow');
     }
 
     session.step = 'mafile';
 
-    await ctx.answerCbQuery();
+    await safeAnswerCb(ctx);
     return ctx.editMessageText('Send mafile JSON text:');
   });
 
@@ -181,19 +346,19 @@ export function createBot(config = getConfig()) {
     const session = sessions.get(ctx.from.id);
 
     if (!session || session.flow !== 'add_account') {
-      return ctx.answerCbQuery('No active add account flow');
+      return safeAnswerCb(ctx, 'No active add account flow');
     }
 
     session.step = 'confirm';
 
-    await ctx.answerCbQuery();
+    await safeAnswerCb(ctx);
     return ctx.editMessageText(formatAddAccountConfirm(session.data), addAccountConfirmKeyboard());
   });
 
   bot.on('text', async (ctx) => {
     const session = sessions.get(ctx.from.id);
 
-    if (session?.flow === 'add_account') {
+    if (session?.flow === 'add_account' || session?.flow === 'edit_account' || session?.flow === 'add_mafile') {
       return continueAddAccount(ctx, session);
     }
 
@@ -231,26 +396,41 @@ function adminOnly(adminIds) {
   };
 }
 
+async function safeAnswerCb(ctx, ...args) {
+  try {
+    // use apply to preserve arguments
+    await ctx.answerCbQuery(...args);
+  } catch (err) {
+    // swallow Telegram "query is too old" / invalid callback errors
+    const desc = err?.response?.description || err?.message || '';
+    if (typeof desc === 'string' && (desc.includes('query is too old') || desc.includes('query ID is invalid') || desc.includes('QUERY_ID')) ) {
+      return;
+    }
+    // otherwise log and continue
+    console.error('answerCbQuery failed', err?.response || err?.message || err);
+  }
+}
+
 // /stats
 
 async function showStats(ctx) {
-  const stats = getStats();
+  const stats = await getStats();
 
   await answer(ctx, [
     'Stats',
     '',
     `Accounts: ${stats.totalAccounts}`,
-    `Available: ${stats.availableAccounts}`,
-    `Rented: ${stats.rentedAccounts}`,
+    `Available: ${stats.available}`,
+    `Rented: ${stats.rented}`,
     `Active rentals: ${stats.activeRentals}`,
-    `Orders: ${stats.totalOrders}`,
+    `New orders: ${stats.newOrders}`,
   ].join('\n'));
 }
 
 // /accs
 
 async function showAccounts(ctx) {
-  const accounts = getAccounts();
+  const accounts = await getAccounts();
 
   if (accounts.length === 0) {
     await answer(ctx, 'No accounts yet. Add one with:\n/add_acc');
@@ -274,7 +454,7 @@ function formatAccountCard(account, options = {}) {
     `Login: ${account.login}`,
     `Password: ${password}`,
     `Status: ${account.status}`,
-    `Steam Guard: ${account.sharedSecret ? 'connected' : 'not connected'}`,
+    `Steam Guard: ${account.sharedSecret || account.steamId ? 'connected' : 'not connected'}`,
   ].join('\n');
 }
 
@@ -289,18 +469,38 @@ function formatAccountsList(accounts) {
 }
 
 function accountCardKeyboard(account) {
+  const firstRow = [Markup.button.callback('Show password', `acc_password:${account.id}`)];
+  const hasSteamSecrets = Boolean(
+    account.sharedSecret || account.identitySecret || account.mafileId || account.steamId
+  );
+
+  if (hasSteamSecrets) {
+    firstRow.push(Markup.button.callback('Get code', `acc_code:${account.id}`));
+  } else {
+    firstRow.push(Markup.button.callback('Add mafile', `acc_add_mafile:${account.id}`));
+  }
+
+  const disableButtonLabel = account.status === 'disabled' ? 'Enable' : 'Disable';
+
   return Markup.inlineKeyboard([
-    [
-      Markup.button.callback('Show password', `acc_password:${account.id}`),
-      Markup.button.callback('Get code', `acc_code:${account.id}`),
-    ],
+    firstRow,
     [
       Markup.button.callback('Edit', `acc_edit:${account.id}`),
-      Markup.button.callback('Disable', `acc_disable:${account.id}`),
+      Markup.button.callback(disableButtonLabel, `acc_disable:${account.id}`),
     ],
     [
       Markup.button.callback('Delete', `acc_delete:${account.id}`),
       Markup.button.callback('Back', 'accs_back'),
+    ],
+  ]);
+}
+
+function confirmKeyboard(actionPrefix, id) {
+  const cancelAction = actionPrefix === 'acc_enable' ? 'acc_enable_cancel' : 'acc_disable_cancel';
+  return Markup.inlineKeyboard([
+    [
+      Markup.button.callback('Confirm', `${actionPrefix}_confirm:${id}`),
+      Markup.button.callback('Cancel', `${cancelAction}:${id}`),
     ],
   ]);
 }
@@ -359,141 +559,104 @@ async function continueAddAccount(ctx, session) {
   const text = ctx.message?.text?.trim();
 
   if (!text) {
-    return ctx.reply('Send text value gandon')
+    return ctx.reply('Send text value');
   }
 
-  switch (session.step) {
-    case 'title':
-      session.data.title = text;
-      session.step = 'login';
-      return ctx.reply('Enter login:');
+  // add_account flow (creates new account)
+  if (session.flow === 'add_account') {
+    switch (session.step) {
+      case 'title':
+        session.data.title = text;
+        session.step = 'login';
+        return ctx.reply('Enter login:');
 
-    case 'login':
-      session.data.login = text;
-      session.step = 'password';
-      return ctx.reply('Enter password:');
+      case 'login':
+        session.data.login = text;
+        session.step = 'password';
+        return ctx.reply('Enter password:');
 
-    // case 'password':
-    //   session.data.password = text;
-    //   session.step = 'confirm';
+      case 'password':
+        session.data.password = text;
+        session.step = 'mafile_choice';
+        return ctx.reply(
+          'Attach mafile now?',
+          Markup.inlineKeyboard([
+            [Markup.button.callback('Yes', 'add_acc_mafile_yes'), Markup.button.callback('Skip', 'add_acc_mafile_skip')],
+          ]),
+        );
 
-    //   return ctx.reply(
-    //     [
-    //       'Check account data:',
-    //       '',
-    //       `Title: ${session.data.title}`,
-    //       `Login: ${session.data.login}`,
-    //       `Password: ********`,
-    //       '',
-    //       'Save account?',
-    //     ].join('\n'),
-    //   Markup.inlineKeyboard([
-    //     [Markup.button.callback('Save', 'add_acc_save'),
-    //       Markup.button.callback('Cancel', 'add_acc_cancel'),
-    //     ],
-    //   ]),
-    // );
+      case 'mafile':
+        try {
+          const mafileData = parseMafile(text);
+          session.data.sharedSecret = mafileData.sharedSecret;
+          session.data.identitySecret = mafileData.identitySecret;
+          session.data.steamId = mafileData.steamId;
+          session.data.accountName = mafileData.accountName;
 
-    case 'password':
-      session.data.password = text;
-      session.step = 'mafile_choice';
+          if (!session.data.login && mafileData.accountName) {
+            session.data.login = mafileData.accountName;
+          }
 
-      return ctx.reply(
-        'Attach mafile now?',
-        Markup.inlineKeyboard([
-          [
-            Markup.button.callback('Yes', 'add_acc_mafile_yes'),
-            Markup.button.callback('Skip', 'add_acc_mafile_skip'),
-          ],
-        ]),
-      );
-    
-    case 'mafile':
-      try{
-        const mafileData = parseMafile(text);
-
-        session.data.sharedSecret = mafileData.sharedSecret;
-        session.data.identitySecret = mafileData.identitySecret;
-        session.data.steamId = mafileData.steamId;
-        session.data.accountName = mafileData.accountName;
-
-        if (!session.data.login && mafileData.accountName) {
-          session.data.login = mafileData.accountName;
+          session.step = 'confirm';
+          return ctx.reply(formatAddAccountConfirm(session.data), addAccountConfirmKeyboard());
+        } catch (err) {
+          return ctx.reply(`Error parsing mafile: ${err.message}`);
         }
 
-        session.step = 'confirm';
+      default:
+        sessions.delete(ctx.from.id);
+        return ctx.reply('Add account flow was reset. Use /add_acc again');
+    }
+  }
 
-        return ctx.reply(
-          formatAddAccountConfirm(session.data),
-          addAccountConfirmKeyboard(),
-        );
-      } catch (error) {
-        return ctx.reply(`Error: ${error.message}`)
-      }
-
-    default:
+  // add_mafile flow (attach mafile to existing account)
+  if (session.flow === 'add_mafile') {
+    try {
+      const mafileData = parseMafile(text);
+      await attachMafileToAccount(session.accountId, {
+        sharedSecret: mafileData.sharedSecret,
+        identitySecret: mafileData.identitySecret,
+        rawJson: mafileData.raw,
+      });
       sessions.delete(ctx.from.id);
-      return ctx.reply("Add account flow was reset. Use /add_acc again")
-  }
-}
-
-// /active_rentals
-
-async function showActiveRentals(ctx) {
-  const rentals = getActiveRentals();
-
-  if (rentals.length === 0) {
-    await answer(ctx, 'No active rentals.');
-    return;
+      await ctx.reply('Mafile attached successfully.');
+      return;
+    } catch (err) {
+      return ctx.reply(`Error parsing mafile: ${err.message}`);
+    }
   }
 
-  await answer(ctx, [
-    'Active rentals',
-    '',
-    ...rentals.map((rental) => (
-      `#${rental.id} account #${rental.accountId}\nBuyer: ${rental.buyer}\nUntil: ${rental.endsAt}`
-    )),
-  ].join('\n\n'));
-}
+  // edit_account flow
+  if (session.flow === 'edit_account') {
+    switch (session.step) {
+      case 'title':
+        session.data.title = text;
+        session.step = 'login';
+        return ctx.reply(`Enter login (current: ${session.data.login || ''}):`);
 
-// async function handleText(ctx) {
-//   const session = sessions.get(ctx.from.id);
+      case 'login':
+        session.data.login = text;
+        session.step = 'password';
+        return ctx.reply('Enter password (send blank to keep unchanged):');
 
-//   if (session?.flow === 'add_account') {
-//     return continueAddAccount(ctx, session);
-//   }
+      case 'password':
+        session.data.password = text;
+        session.step = 'notes';
+        return ctx.reply(`Enter notes (current: ${session.data.notes || ''}):`);
 
-//   await ctx.reply('Unknown command. Use /help.');
-// }
+      case 'notes':
+        session.data.notes = text;
+        session.step = 'confirm';
+        await ctx.reply(formatAddAccountConfirm(session.data), Markup.inlineKeyboard([[Markup.button.callback('Save', 'edit_acc_save'), Markup.button.callback('Cancel', 'edit_acc_cancel')]]));
+        return;
 
-// /orders
-
-async function showOrders(ctx) {
-  const orders = getOrders();
-
-  if (orders.length === 0) {
-    await answer(ctx, 'No orders yet. FunPay integration will fill this later.');
-    return;
+      default:
+        sessions.delete(ctx.from.id);
+        return ctx.reply('Edit flow was reset.');
+    }
   }
 
-  await answer(ctx, [
-    'Orders',
-    '',
-    ...orders.map((order) => `#${order.id} ${order.status} - ${order.title}`),
-  ].join('\n'));
-}
-
-// /settings
-
-async function showSettings(ctx) {
-  await answer(ctx, [
-    'Settings',
-    '',
-    'Storage: in-memory draft',
-    'FunPay: not connected',
-    'Steam: not connected',
-    'Security: admin allowlist via TG_ADMIN_IDS',
-  ].join('\n'));
+  return ctx.reply('No active session flow.');
 }
 
 function mainMenu() {
@@ -529,7 +692,7 @@ function getMessageText(ctx) {
 
 async function answer(ctx, text, keyboard = mainMenu()) {
   if (ctx.callbackQuery) {
-    await ctx.answerCbQuery();
+    await safeAnswerCb(ctx);
     await ctx.editMessageText(text, keyboard);
     return;
   }

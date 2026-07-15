@@ -20,6 +20,10 @@ export function getAccounts() {
   return [...accounts];
 }
 
+export function getAccountById(id) {
+  return accounts.find((account) => account.id === id);
+}
+
 export function getActiveRentals() {
   return rentals.filter((rental) => rental.status === 'active');
 }
@@ -28,16 +32,43 @@ export function getOrders() {
   return [...orders];
 }
 
-export function addAccount({ title, login, password }) {
-  const account = {
-    id: accounts.length + 1,
-    title,
-    login,
-    password,
-    status: 'available',
-    createdAt: new Date().toISOString(),
-  };
+export function addAccount({ 
+  title,
+  login, 
+  password,
+  sharedSecret = null,
+  identitySecret = null,
+  steamId = null,
+  accountName = null,
+   }) {
+    const account = {
+      id: accounts.length + 1,
+      title,
+      login,
+      password,
+      sharedSecret,
+      identitySecret,
+      steamId,
+      accountName,
+      status: 'available',
+      createdAt: new Date().toISOString(),
+    };
 
-  accounts.push(account);
+    accounts.push(account);
+    return account;
+}
+
+export function attachMafileToAccount(id, mafileData) {
+  const account = getAccountById(id);
+
+  if(!account) {
+    return null;
+  }
+
+  account.sharedSecret = mafileData.sharedSecret;
+  account.identitySecret = mafileData.identitySecret;
+  account.steamId = mafileData.steamId;
+  account.accountName = mafileData.accountName;
+
   return account;
 }

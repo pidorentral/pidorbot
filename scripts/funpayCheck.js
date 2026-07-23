@@ -8,7 +8,11 @@ async function main() {
 
   console.log('FunPay session is valid.');
   console.log(`Seller: ${profile.username || 'unknown'} (#${profile.userId})`);
-  console.log(`New order IDs found: ${newOrders.length ? newOrders.map((order) => order.funpayOrderId).join(', ') : 'none'}`);
+  console.log(`New order IDs found: ${newOrders.length ? newOrders.map((o) => o.funpayOrderId).join(', ') : 'none'}`);
+
+  // тест чата
+  const nodeId = await client.getChatNodeId(profile.userId);
+  console.log('Chat node:', nodeId);
 }
 
 main().catch((error) => {
@@ -19,3 +23,6 @@ main().catch((error) => {
   }
   process.exit(1);
 });
+
+const nodeId = await client.getChatNodeId(profile.userId); // свой ID для теста
+console.log('Chat node:', nodeId);

@@ -15,18 +15,44 @@ function getGoldenKey() {
   return key;
 }
 
-function decodeHtmlAttribute(value) {
-  return value.replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, '&');
+function decodeHtml(value) {
+  const amp = String.fromCharCode(38);
+
+  return value
+    .replaceAll(`${amp}quot;`, '"')
+    .replaceAll(`${amp}#34;`, '"')
+    .replaceAll(`${amp}#x22;`, '"')
+    .replaceAll(`${amp}#39;`, "'")
+    .replaceAll(`${amp}#x27;`, "'")
+    .replaceAll(`${amp}lt;`, '<')
+    .replaceAll(`${amp}gt;`, '>')
+    .replaceAll(`${amp}amp;`, '&')
+    .trim();
 }
 
 function getAppData(html) {
-  const match = html.match(/data-app-data=(['"])([\s\S]*?)\1/);
-  if (!match) throw new FunpayAuthError();
+  const marker = html.indexOf('data-app-data=');
+  if (marker === -1) throw new FunpayAuthError();
+
+  const attributeStart = marker + 'data-app-data='.length;
+  const quote = html[attributeStart];
+  const start = attributeStart + 1;
+
+  if (quote !== '"' && quote !== "'") {
+    throw new FunpayAuthError();
+  }
+
+  const end = html.indexOf(quote, start);
+  if (end === -1) throw new FunpayAuthError();
+
+  const raw = decodeHtml(html.slice(start, end));
 
   try {
-    return JSON.parse(decodeHtmlAttribute(match[2]));
-  } catch {
-    throw new Error('FunPay returned an unsupported profile page');
+    return JSON.parse(raw);
+  } catch (error) {
+    console.log('First chars:', [...raw.slice(0, 20)].map((c) => c.charCodeAt(0)));
+    console.log('Prefix:', JSON.stringify(raw.slice(0, 100)));
+    throw new Error(`Invalid FunPay app data: ${error.message}`);
   }
 }
 
@@ -35,16 +61,20 @@ export class FunpayClient {
     if (typeof fetchImpl !== 'function') throw new Error('A fetch implementation is required');
     this.goldenKey = goldenKey;
     this.fetch = fetchImpl;
+    this._appData = null;
+    this.cookies = new Map()
   }
 
-  async request(path = '') {
+  async request(path = '', options = {}) {
     const response = await this.fetch(new URL(path, FUNPAY_URL), {
       headers: {
         Accept: 'text/html,application/xhtml+xml',
         'User-Agent': 'pidorbot/1.0 (+FunPay session check)',
         Cookie: `golden_key=${this.goldenKey}`,
+        ...options.headers,
       },
       redirect: 'follow',
+      ...options,
     });
 
     if (!response.ok) throw new Error(`FunPay request failed with HTTP ${response.status}`);
@@ -54,8 +84,31 @@ export class FunpayClient {
     return html;
   }
 
+  // --- App data & CSRF ---
+
+  async getAppData() {
+    if (!this._appData) {
+      const html = await this.request();
+      this._appData = getAppData(html);
+    }
+    return this._appData;
+  }
+
+  invalidateAppData() {
+    this._appData = null;
+  }
+
+  async getCsrfToken() {
+    const appData = await this.getAppData();
+    const token = appData['csrf-token'] || appData.csrfToken;
+    if (!token) throw new Error('CSRF token not found in FunPay app data');
+    return token;
+  }
+
+  // --- Profile ---
+
   async getProfile() {
-    const appData = getAppData(await this.request());
+    const appData = await this.getAppData();
     const userId = Number(appData.userId);
     if (!Number.isSafeInteger(userId)) throw new FunpayAuthError();
 
@@ -65,8 +118,95 @@ export class FunpayClient {
     };
   }
 
+  // Orders
+
   async getNewOrders() {
     const html = await this.request('orders/trade');
     return parseNewOrders(html);
+  }
+
+  // Messages
+  async getNewMessages(lastEventId = 0) {
+  const csrfToken = await this.getCsrfToken();
+
+  const body = new URLSearchParams({
+    request: JSON.stringify({
+      action: 'chat_bookmarks',
+      data: { last_event: lastEventId },
+    }),
+    csrf_token: csrfToken,
+  });
+
+  const response = await this.fetch(new URL('/runner/', FUNPAY_URL), {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+      'User-Agent': 'pidorbot/1.0',
+      Cookie: `golden_key=${this.goldenKey}`,
+      'X-Requested-With': 'XMLHttpRequest',
+      Origin: FUNPAY_URL,
+      Referer: `${FUNPAY_URL}chat/`,
+    },
+    body: body.toString(),
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Chat poll failed: HTTP ${response.status}: ${text}`);
+  }
+  
+  const json = await response.json();
+  if (json.error) throw new Error(`Chat poll error: ${json.error}`);
+
+  return parseChatResponse(json);
+}
+
+  async sendMessage(nodeId, content) {
+    const csrfToken = await this.getCsrfToken();
+
+    const body = new URLSearchParams({
+      request: JSON.stringify({
+        action: 'chat_message',
+        data: {
+          node: Number(nodeId),
+          content: String(content),
+        },
+      }),
+      csrf_token: csrfToken,
+    });
+
+    const response = await this.fetch(new URL('/runner/', FUNPAY_URL), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'User-Agent': 'pidorbot/1.0',
+        Cookie: `golden_key=${this.goldenKey}`,
+        'X-Requested-With': 'XMLHttpRequest',
+        Origin: FUNPAY_URL,
+        Referer: `${FUNPAY_URL}chat/`,
+      },
+      body: body.toString(),
+    });
+
+    if (!response.ok) {
+      const text = await response.text().catch(() => '');
+      throw new Error(`FunPay chat send failed: HTTP ${response.status} ${text}`);
+    }
+
+    const json = await response.json();
+    if (json.error) throw new Error(`FunPay chat error: ${json.error}`);
+    return json;
+  }
+
+  async getChatNodeId(buyerId) {
+    const html = await this.request(`chat/?node=${buyerId}`);
+    const match = html.match(/data-node=['"]([\d]+)['"]/);
+    if (match) return Number(match[1]);
+
+    // fallback: try to find in chat list
+    const listMatch = html.match(
+      new RegExp(`data-id=['"](\\d+)['"][^>]*data-user-id=['"]${buyerId}['"]`, 'i')
+    );
+    return listMatch ? Number(listMatch[1]) : null;
   }
 }

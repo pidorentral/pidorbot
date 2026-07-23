@@ -258,3 +258,11 @@ export async function updateAccount(accountId, updates = {}) {
   const res = await query(sql, values);
   return res.rows[0] || null;
 }
+
+export async function incrementCodeCount(rentalId) {
+  await query(`UPDATE rentals SET code_count = code_count + 1 WHERE id = $1`, [rentalId]);
+}
+
+export async function setRentalState(rentalId, state) {
+  await query(`UPDATE rentals SET state = $1 WHERE id = $2`, [state, rentalId]);
+}

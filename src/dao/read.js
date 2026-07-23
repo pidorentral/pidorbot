@@ -137,3 +137,17 @@ export async function getStats() {
     newOrders: Number(r.new_orders),
   };
 }
+
+export async function getActiveRentalByNodeId(nodeId) {
+  const res = await query(
+    `
+    SELECT r.id, r.account_id AS "accountId", r.buyer, r.state, r.code_count AS "codeCount",
+           r.node_id AS "nodeId", r.order_id AS "orderId"
+    FROM rentals r
+    WHERE r.node_id = $1 AND r.status = 'active'
+    LIMIT 1
+    `,
+    [nodeId]
+  );
+  return res.rows[0] || null;
+}

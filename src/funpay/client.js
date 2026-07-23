@@ -1,4 +1,5 @@
 import { parseNewOrders } from './orderParser.js';
+import { parseChatResponse } from './chatParser.js';
 
 const FUNPAY_URL = 'https://funpay.com/';
 
@@ -56,6 +57,42 @@ function getAppData(html) {
   }
 }
 
+function parseChatResponse(json) {
+  const result = {
+    lastEventId: json.last_event ?? 0,
+    chats: [],
+  };
+
+  const bookmarks = json.objects?.find((o) => o.type === 'chat_bookmarks');
+  if (!bookmarks?.data?.html) return result;
+
+  const html = bookmarks.data.html;
+
+  // Each contact is a <a class="contact-item"> block
+  const contactRegex = /<a[^>]*class="contact-item[^"]*"[^>]*href="\/chat\/\?node=(\d+)"[^>]*>([\s\S]*?)<\/a>/gi;
+
+  let match;
+  while ((match = contactRegex.exec(html)) !== null) {
+    const nodeId = Number(match[1]);
+    const block = match[2];
+
+    // Username
+    const nameMatch = block.match(/<div[^>]*class="media-user-name[^"]*"[^>]*>(.*?)<\/div>/i);
+    const username = nameMatch ? nameMatch[1].trim() : null;
+
+    // Last message preview
+    const msgMatch = block.match(/<div[^>]*class="contact-item-message[^"]*"[^>]*>(.*?)<\/div>/is);
+    const lastMessage = msgMatch ? msgMatch[1].replace(/<[^>]+>/g, '').trim() : null;
+
+    // Unread indicator
+    const unread = /unread/.test(match[0]);
+
+    result.chats.push({ nodeId, username, lastMessage, unread });
+  }
+
+  return result;
+}
+
 export class FunpayClient {
   constructor({ goldenKey = getGoldenKey(), fetchImpl = globalThis.fetch } = {}) {
     if (typeof fetchImpl !== 'function') throw new Error('A fetch implementation is required');
@@ -65,24 +102,41 @@ export class FunpayClient {
     this.cookies = new Map()
   }
 
-  async request(path = '', options = {}) {
-    const response = await this.fetch(new URL(path, FUNPAY_URL), {
-      headers: {
-        Accept: 'text/html,application/xhtml+xml',
-        'User-Agent': 'pidorbot/1.0 (+FunPay session check)',
-        Cookie: `golden_key=${this.goldenKey}`,
-        ...options.headers,
-      },
-      redirect: 'follow',
-      ...options,
-    });
+  _buildCookieHeader() {
+  const cookies = new Map(this.cookies);
+  cookies.set('golden_key', this.goldenKey);
+  return [...cookies].map(([k, v]) => `${k}=${v}`).join('; ');
+}
 
-    if (!response.ok) throw new Error(`FunPay request failed with HTTP ${response.status}`);
-
-    const html = await response.text();
-    if (response.url.includes('/login') || response.url.includes('/auth')) throw new FunpayAuthError();
-    return html;
+  _captureSetCookies(response) {
+    const raw = response.headers.getSetCookie?.() || response.headers.raw?.()['set-cookie'] || [];
+    for (const cookie of raw) {
+      const [pair] = cookie.split(';');
+      const [name, ...rest] = pair.split('=');
+      this.cookies.set(name.trim(), rest.join('=').trim());
+    }
   }
+
+  async request(path = '', options = {}) {
+  const response = await this.fetch(new URL(path, FUNPAY_URL), {
+    headers: {
+      Accept: 'text/html,application/xhtml+xml',
+      'User-Agent': 'pidorbot/1.0',
+      Cookie: this._buildCookieHeader(),
+      ...options.headers,
+    },
+    redirect: 'follow',
+    ...options,
+  });
+
+  if (!response.ok) throw new Error(`FunPay request failed with HTTP ${response.status}`);
+
+  this._captureSetCookies(response);
+
+  const html = await response.text();
+  if (response.url.includes('/login') || response.url.includes('/auth')) throw new FunpayAuthError();
+  return html;
+}
 
   // --- App data & CSRF ---
 
@@ -142,7 +196,7 @@ export class FunpayClient {
     headers: {
       'Content-Type': 'application/x-www-form-urlencoded',
       'User-Agent': 'pidorbot/1.0',
-      Cookie: `golden_key=${this.goldenKey}`,
+      Cookie: this._buildCookieHeader(),
       'X-Requested-With': 'XMLHttpRequest',
       Origin: FUNPAY_URL,
       Referer: `${FUNPAY_URL}chat/`,
@@ -180,7 +234,7 @@ export class FunpayClient {
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded',
         'User-Agent': 'pidorbot/1.0',
-        Cookie: `golden_key=${this.goldenKey}`,
+        Cookie: this._buildCookieHeader(),
         'X-Requested-With': 'XMLHttpRequest',
         Origin: FUNPAY_URL,
         Referer: `${FUNPAY_URL}chat/`,

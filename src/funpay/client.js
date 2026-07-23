@@ -1,5 +1,4 @@
 import { parseNewOrders } from './orderParser.js';
-import { parseChatResponse } from './chatParser.js';
 
 const FUNPAY_URL = 'https://funpay.com/';
 

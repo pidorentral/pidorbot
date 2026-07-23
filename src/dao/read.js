@@ -15,6 +15,32 @@ export async function listAccounts({ status = null, limit = 50, offset = 0 } = {
   return res.rows;
 }
 
+export async function findAvailableAccount() {
+  const res = await query(
+    `
+    SELECT id, title, login, status, steam_id AS "steamId", mafile_id AS "mafileId", notes, created_at AS "createdAt"
+    FROM accounts
+    WHERE status = 'available'
+    ORDER BY created_at ASC
+    LIMIT 1
+    `
+  );
+  return res.rows[0] || null;
+}
+
+export async function getOrderByFunpayId(funpayOrderId) {
+  const res = await query(
+    `
+    SELECT id, funpay_order_id AS "funpayOrderId", buyer, account_id AS "accountId", status, price, created_at AS "createdAt"
+    FROM orders
+    WHERE funpay_order_id = $1
+    LIMIT 1
+    `,
+    [funpayOrderId]
+  );
+  return res.rows[0] || null;
+}
+
 export async function getAccountById(id, { includeSecrets = false } = {}) {
   const res = await query(
     `

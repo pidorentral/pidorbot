@@ -3,7 +3,8 @@
   "scripts": {
     "start": "node main.js",
     "dev": "node main.js",
-    "db:smoke": "node scripts/dbSmoke.js"
+    "db:smoke": "node scripts/dbSmoke.js",
+    "funpay:check": "node scripts/funpayCheck.js"
   },
   "dependencies": {
     "crypto": "^1.0.1",

@@ -92,6 +92,50 @@ function parseChatResponse(json) {
   return result;
 }
 
+export function parseChatPage(html) {
+  const result = {
+    lastMessageId: 0,
+    counter: 0,
+    chats: [],
+  };
+
+  const bookmarks = json.objects?.find(o => o.type === 'chat_bookmarks');
+  if (!bookmarks?.data) return result;
+
+  const { data } = bookmarks;
+  result.lastMessageId = data.message || 0;
+  result.counter = data.counter || 0;
+
+  if (!data.html) return result;
+
+  const regex = /<a[^>]*data-id="(\d+)"[^>]*data-node-msg="(\d+)"[^>]*data-user-msg="(\d+)"[^>]*class="([^"]*)"[^>]*>[\s\S]*?<div class="media-user-name">(.*?)<\/div>[\s\S]*?<div class="contact-item-message">(.*?)<\/div>/gi;
+
+  // Более надёжный вариант — парсить блоками
+  const blocks = data.html.split(/<a /gi).slice(1);
+
+  for (const block of blocks) {
+    const nodeId = block.match(/data-id="(\d+)"/)?.[1];
+    const nodeMsgId = block.match(/data-node-msg="(\d+)"/)?.[1];
+    const userMsgId = block.match(/data-user-msg="(\d+)"/)?.[1];
+    const unread = /class="[^"]*unread/.test(block);
+    const username = block.match(/media-user-name">(.*?)<\/div>/)?.[1]?.trim();
+    const lastMessage = block.match(/contact-item-message">(.*?)<\/div>/)?.[1]?.trim();
+
+    if (nodeId) {
+      result.chats.push({
+        nodeId: Number(nodeId),
+        lastMsgId: Number(nodeMsgId),
+        userMsgId: Number(userMsgId),
+        username,
+        lastMessage,
+        unread,
+      });
+    }
+  }
+
+  return result;
+}
+
 export class FunpayClient {
   constructor({ goldenKey = getGoldenKey(), fetchImpl = globalThis.fetch } = {}) {
     if (typeof fetchImpl !== 'function') throw new Error('A fetch implementation is required');
@@ -179,16 +223,24 @@ export class FunpayClient {
   }
 
   // Messages
-  async getNewMessages(lastEventId = 0) {
+  async getNewMessages(chatPairs = []) {
   const csrfToken = await this.getCsrfToken();
+  const appData = await this.getAppData();
+  const userId = appData.userId;
 
-  const body = new URLSearchParams({
-    request: JSON.stringify({
-      action: 'chat_bookmarks',
-      data: { last_event: lastEventId },
-    }),
-    csrf_token: csrfToken,
-  });
+  const objects = [
+    {
+      type: 'chat_bookmarks',
+      id: String(userId),
+      tag: '',
+      data: chatPairs, // [[nodeId, lastMsgId], [nodeId, lastMsgId], ...]
+    },
+  ];
+
+  const body = new URLSearchParams();
+  body.append('objects', JSON.stringify(objects));
+  body.append('request', 'false');
+  body.append('csrf_token', csrfToken);
 
   const response = await this.fetch(new URL('/runner/', FUNPAY_URL), {
     method: 'POST',
@@ -207,11 +259,17 @@ export class FunpayClient {
     const text = await response.text();
     throw new Error(`Chat poll failed: HTTP ${response.status}: ${text}`);
   }
-  
-  const json = await response.json();
-  if (json.error) throw new Error(`Chat poll error: ${json.error}`);
 
-  return parseChatResponse(json);
+  const json = await response.json();
+  console.log('RAW JSON:', JSON.stringify(json, null, 2));
+
+  if (json.error) throw new Error(`Chat poll error: ${json.error}`);
+  return json;
+}
+
+  async getChatList() {
+  const html = await this.request('chat/');
+  return html;
 }
 
   async sendMessage(nodeId, content) {

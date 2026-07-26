@@ -23,6 +23,3 @@ main().catch((error) => {
   }
   process.exit(1);
 });
-
-const nodeId = await client.getChatNodeId(profile.userId); // свой ID для теста
-console.log('Chat node:', nodeId);

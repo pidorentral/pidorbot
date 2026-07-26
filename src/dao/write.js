@@ -52,41 +52,131 @@ export async function attachMafileToAccount(accountId, { sharedSecret, identityS
   }
 }
 
-export async function createOrder({ funpayOrderId, buyer, accountId = null, price, status = 'new' }) {
+export async function createOrder({
+  funpayOrderId,
+  buyer,
+  accountId = null,
+  price,
+  status = 'new'
+}) {
+
+  console.log({
+    funpayOrderId,
+    buyer,
+    accountId,
+    price,
+    status
+  });
+
   const res = await query(
     `INSERT INTO orders (funpay_order_id, buyer, account_id, price, status)
      VALUES ($1, $2, $3, $4, $5)
      RETURNING *`,
     [funpayOrderId, buyer, accountId, price, status]
   );
+
   return res.rows[0];
 }
 
-export async function reserveAccount({ accountId, buyer, endsAt, orderId = null, nodeId = null }) {
+export async function ensureRental({
+  buyer,
+  endsAt,
+  orderId,
+  nodeId
+}) {
   const client = await getClient();
+
   try {
-    await client.query('BEGIN');
+    await client.query("BEGIN");
 
+    // Проверяем, не создана ли уже аренда
+    const existingRental = await client.query(
+      `SELECT
+          r.*,
+          a.id AS account_id
+       FROM rentals r
+       JOIN accounts a ON a.id = r.account_id
+       WHERE r.order_id = $1
+       FOR UPDATE`,
+      [orderId]
+    );
+
+    if (existingRental.rows.length) {
+      const rental = existingRental.rows[0];
+
+      await client.query("COMMIT");
+
+      return {
+        rental,
+        account: {
+          id: rental.account_id
+        }
+      };
+    }
+
+    // Ищем свободный аккаунт
+    const accountRes = await client.query(
+      `SELECT *
+       FROM accounts
+       WHERE status = 'available'
+       ORDER BY id
+       LIMIT 1
+       FOR UPDATE SKIP LOCKED`
+    );
+
+    if (!accountRes.rows.length) {
+      await client.query("ROLLBACK");
+      return null;
+    }
+
+    const account = accountRes.rows[0];
+
+    // Создаём аренду
     const rentalRes = await client.query(
-      `INSERT INTO rentals (account_id, buyer, order_id, ends_at, node_id, status, state)
-       VALUES ($1, $2, $3, $4, $5, 'active', 'active')
-       RETURNING *`,
-      [accountId, buyer, orderId, endsAt, nodeId]
+      `INSERT INTO rentals (
+          account_id,
+          buyer,
+          order_id,
+          ends_at,
+          node_id,
+          status,
+          state
+      )
+      VALUES ($1,$2,$3,$4,$5,'active','active')
+      RETURNING *`,
+      [
+        account.id,
+        buyer,
+        orderId,
+        endsAt,
+        nodeId
+      ]
     );
 
-    // Важно: пометить аккаунт как занятый, иначе listAccounts снова выдаст его как "available"
+    // Помечаем аккаунт занятым
     await client.query(
-      `UPDATE accounts SET status = 'rented' WHERE id = $1`,
-      [accountId]
+      `UPDATE accounts
+       SET status = 'rented'
+       WHERE id = $1`,
+      [account.id]
     );
 
-    await client.query('COMMIT');
-    return rentalRes.rows[0];
+    await client.query("COMMIT");
+
+    return {
+      account,
+      rental: rentalRes.rows[0]
+    };
+
   } catch (err) {
-    await client.query('ROLLBACK');
+
+    await client.query("ROLLBACK");
     throw err;
+
   } finally {
+
     client.release();
+
   }
 }
 
@@ -248,3 +338,85 @@ export async function incrementCodeCount(rentalId) {
 export async function setRentalState(rentalId, state) {
   await query(`UPDATE rentals SET state = $1 WHERE id = $2`, [state, rentalId]);
 }
+
+export async function updateOrder(orderId, updates = {}) {
+  const fields = [];
+  const values = [];
+  let idx = 1;
+
+  if (updates.status !== undefined) {
+    fields.push(`status = $${idx++}`);
+    values.push(updates.status);
+  }
+
+  if (updates.accountId !== undefined) {
+    fields.push(`account_id = $${idx++}`);
+    values.push(updates.accountId);
+  }
+
+  if (updates.price !== undefined) {
+    fields.push(`price = $${idx++}`);
+    values.push(updates.price);
+  }
+
+  if (fields.length === 0) {
+    throw new Error('No fields to update');
+  }
+
+  values.push(orderId);
+
+  const res = await query(
+    `UPDATE orders
+     SET ${fields.join(', ')}
+     WHERE id = $${idx}
+     RETURNING *`,
+    values
+  );
+
+  return res.rows[0] || null;
+}
+
+// export async function reserveAvailableAccount() {
+//   const client = await getClient();
+
+//   try {
+//     await client.query('BEGIN');
+
+//     const accountRes = await client.query(
+//       `SELECT *
+//        FROM accounts
+//        WHERE status = 'available'
+//        ORDER BY id
+//        LIMIT 1
+//        FOR UPDATE SKIP LOCKED`
+//     );
+
+//     if (!accountRes.rows.length) {
+//       await client.query('ROLLBACK');
+//       return null;
+//     }
+
+//     const account = accountRes.rows[0];
+
+//     await client.query(
+//       `UPDATE accounts
+//        SET status = 'reserved'
+//        WHERE id = $1`,
+//       [account.id]
+//     );
+
+//     await client.query('COMMIT');
+
+//     return account;
+
+//   } catch (err) {
+
+//     await client.query('ROLLBACK');
+//     throw err;
+
+//   } finally {
+
+//     client.release();
+
+//   }
+// }

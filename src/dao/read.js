@@ -163,3 +163,15 @@ export async function setRentalState(rentalId, state) {
     [state, rentalId]
   );
 }
+
+export async function getRentalByOrderId(orderId) {
+  const res = await query(
+    `SELECT *
+     FROM rentals
+     WHERE order_id = $1`,
+    [orderId]
+  );
+
+  return res.rows[0] || null;
+}
+

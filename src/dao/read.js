@@ -140,14 +140,26 @@ export async function getStats() {
 
 export async function getActiveRentalByNodeId(nodeId) {
   const res = await query(
-    `
-    SELECT r.id, r.account_id AS "accountId", r.buyer, r.state, r.code_count AS "codeCount",
-           r.node_id AS "nodeId", r.order_id AS "orderId"
-    FROM rentals r
-    WHERE r.node_id = $1 AND r.status = 'active'
-    LIMIT 1
-    `,
+    `SELECT id, account_id AS "accountId", buyer, node_id AS "nodeId",
+            state, code_count AS "codeCount", ends_at AS "endsAt"
+     FROM rentals
+     WHERE node_id = $1 AND status = 'active'
+     LIMIT 1`,
     [nodeId]
   );
   return res.rows[0] || null;
+}
+
+export async function incrementCodeCount(rentalId) {
+  await query(
+    `UPDATE rentals SET code_count = code_count + 1 WHERE id = $1`,
+    [rentalId]
+  );
+}
+
+export async function setRentalState(rentalId, state) {
+  await query(
+    `UPDATE rentals SET state = $1 WHERE id = $2`,
+    [state, rentalId]
+  );
 }

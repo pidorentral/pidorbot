@@ -62,50 +62,15 @@ export async function createOrder({ funpayOrderId, buyer, accountId = null, pric
   return res.rows[0];
 }
 
-export async function reserveAccount({ accountId, buyer, endsAt, orderId = null }) {
-  const client = await getClient();
-  try {
-    await client.query('BEGIN');
-
-    const accountRes = await client.query(
-      `SELECT status
-       FROM accounts
-       WHERE id = $1
-       FOR UPDATE`,
-      [accountId]
-    );
-
-    if (!accountRes.rows.length) {
-      throw new Error('Account not found');
-    }
-
-    const account = accountRes.rows[0];
-    if (account.status !== 'available') {
-      throw new Error(`Account is not available: ${account.status}`);
-    }
-
-    const rentalRes = await client.query(
-      `INSERT INTO rentals (account_id, buyer, order_id, ends_at, status)
-       VALUES ($1, $2, $3, $4, 'active')
-       RETURNING *`,
-      [accountId, buyer, orderId, endsAt]
-    );
-
-    await client.query(
-      `UPDATE accounts
-       SET status = 'rented'
-       WHERE id = $1`,
-      [accountId]
-    );
-
-    await client.query('COMMIT');
-    return rentalRes.rows[0];
-  } catch (err) {
-    await client.query('ROLLBACK');
-    throw err;
-  } finally {
-    client.release();
-  }
+export async function reserveAccount({ accountId, buyer, endsAt, orderId = null, nodeId = null }) {
+  // ...existing code...
+  const rentalRes = await client.query(
+    `INSERT INTO rentals (account_id, buyer, order_id, ends_at, node_id, status, state)
+     VALUES ($1, $2, $3, $4, $5, 'active', 'active')
+     RETURNING *`,
+    [accountId, buyer, orderId, endsAt, nodeId]
+  );
+  // ...rest unchanged...
 }
 
 export async function completeRental(rentalId) {

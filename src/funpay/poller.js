@@ -1,5 +1,7 @@
+import { handleNewOrders } from './handlers/orderHandler.js';
 import { FunpayClient } from './client.js';
 
+const client = new FunpayClient();
 const DEFAULT_INTERVAL_MS = 5_000;
 
 function getIntervalMs(value = process.env.FUNPAY_POLL_INTERVAL_MS) {
@@ -12,6 +14,14 @@ function getIntervalMs(value = process.env.FUNPAY_POLL_INTERVAL_MS) {
 
 export function isFunpayPollingEnabled(value = process.env.FUNPAY_POLLING_ENABLED) {
   return value?.trim().toLowerCase() === 'true';
+}
+
+export function startFunpayPoller({ notifyAdmin, logger = console } = {}) {
+  return createFunpayPoller({
+    client,
+    onNewOrders: (orders, log) => handleNewOrders(orders, log, { client, notifyAdmin }),
+    logger,
+  });
 }
 
 export function createFunpayPoller({

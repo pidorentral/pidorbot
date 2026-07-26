@@ -57,39 +57,25 @@ function getAppData(html) {
 }
 
 function parseChatResponse(json) {
-  const result = {
-    lastEventId: json.last_event ?? 0,
-    chats: [],
-  };
+  const objects = json?.objects || [];
+  const messages = [];
 
-  const bookmarks = json.objects?.find((o) => o.type === 'chat_bookmarks');
-  if (!bookmarks?.data?.html) return result;
-
-  const html = bookmarks.data.html;
-
-  // Each contact is a <a class="contact-item"> block
-  const contactRegex = /<a[^>]*class="contact-item[^"]*"[^>]*href="\/chat\/\?node=(\d+)"[^>]*>([\s\S]*?)<\/a>/gi;
-
-  let match;
-  while ((match = contactRegex.exec(html)) !== null) {
-    const nodeId = Number(match[1]);
-    const block = match[2];
-
-    // Username
-    const nameMatch = block.match(/<div[^>]*class="media-user-name[^"]*"[^>]*>(.*?)<\/div>/i);
-    const username = nameMatch ? nameMatch[1].trim() : null;
-
-    // Last message preview
-    const msgMatch = block.match(/<div[^>]*class="contact-item-message[^"]*"[^>]*>(.*?)<\/div>/is);
-    const lastMessage = msgMatch ? msgMatch[1].replace(/<[^>]+>/g, '').trim() : null;
-
-    // Unread indicator
-    const unread = /unread/.test(match[0]);
-
-    result.chats.push({ nodeId, username, lastMessage, unread });
+  for (const obj of objects) {
+    if (obj.type !== 'chat_bookmarks') continue;
+    const data = obj.data?.bookmarks || [];
+    for (const bm of data) {
+      messages.push({
+        id: bm.id || 0,
+        nodeId: bm.node,
+        author: bm.author,
+        authorId: bm.author_id,
+        text: bm.text || '',
+        timestamp: bm.ts,
+      });
+    }
   }
 
-  return result;
+  return messages;
 }
 
 export function parseChatPage(html) {

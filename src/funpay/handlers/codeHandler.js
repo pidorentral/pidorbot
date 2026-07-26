@@ -1,6 +1,5 @@
 import { generateSteamGuardCode } from '../../../steam/steamGuard.js';
-import { getAccountById } from '../../dao/read.js';
-import { getActiveRentalByNodeId, incrementCodeCount } from '../../dao/read.js';
+import { getAccountById, getActiveRentalByNodeId, incrementCodeCount, setRentalState } from '../../dao/read.js';
 
 const MAX_CODES = 5; // лимит кодов до автолока
 

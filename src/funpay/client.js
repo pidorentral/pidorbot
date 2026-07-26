@@ -56,70 +56,53 @@ function getAppData(html) {
   }
 }
 
-function parseChatResponse(json) {
-  const objects = json?.objects || [];
-  const messages = [];
-
-  for (const obj of objects) {
-    if (obj.type !== 'chat_bookmarks') continue;
-    const data = obj.data?.bookmarks || [];
-    for (const bm of data) {
-      messages.push({
-        id: bm.id || 0,
-        nodeId: bm.node,
-        author: bm.author,
-        authorId: bm.author_id,
-        text: bm.text || '',
-        timestamp: bm.ts,
-      });
-    }
-  }
-
-  return messages;
-}
-
-export function parseChatPage(html) {
-  const result = {
-    lastMessageId: 0,
-    counter: 0,
-    chats: [],
-  };
-
-  const bookmarks = json.objects?.find(o => o.type === 'chat_bookmarks');
-  if (!bookmarks?.data) return result;
-
-  const { data } = bookmarks;
-  result.lastMessageId = data.message || 0;
-  result.counter = data.counter || 0;
-
-  if (!data.html) return result;
-
-  const regex = /<a[^>]*data-id="(\d+)"[^>]*data-node-msg="(\d+)"[^>]*data-user-msg="(\d+)"[^>]*class="([^"]*)"[^>]*>[\s\S]*?<div class="media-user-name">(.*?)<\/div>[\s\S]*?<div class="contact-item-message">(.*?)<\/div>/gi;
-
-  // Более надёжный вариант — парсить блоками
-  const blocks = data.html.split(/<a /gi).slice(1);
+function parseBookmarksHtml(html = '') {
+  const chats = [];
+  const blocks = html.split(/<a /gi).slice(1);
 
   for (const block of blocks) {
     const nodeId = block.match(/data-id="(\d+)"/)?.[1];
     const nodeMsgId = block.match(/data-node-msg="(\d+)"/)?.[1];
     const userMsgId = block.match(/data-user-msg="(\d+)"/)?.[1];
-    const unread = /class="[^"]*unread/.test(block);
     const username = block.match(/media-user-name">(.*?)<\/div>/)?.[1]?.trim();
-    const lastMessage = block.match(/contact-item-message">(.*?)<\/div>/)?.[1]?.trim();
+    const lastMessage = block.match(/contact-item-message">([\s\S]*?)<\/div>/)?.[1]?.trim();
 
     if (nodeId) {
-      result.chats.push({
+      chats.push({
         nodeId: Number(nodeId),
-        lastMsgId: Number(nodeMsgId),
-        userMsgId: Number(userMsgId),
+        lastMsgId: Number(nodeMsgId || userMsgId || 0),
         username,
-        lastMessage,
-        unread,
+        text: lastMessage || '',
       });
     }
   }
 
-  return result;
+  return chats;
+}
+
+function parseChatResponse(json) {
+  const objects = json?.objects || [];
+  const chats = [];
+
+  for (const obj of objects) {
+    if (obj.type !== 'chat_bookmarks') continue;
+    chats.push(...parseBookmarksHtml(obj.data?.html || ''));
+  }
+
+  return chats;
+}
+function findNodeIdByUsername(html, username) {
+  const blocks = html.split(/<a /gi).slice(1);
+
+  for (const block of blocks) {
+    const name = block.match(/media-user-name">\s*([^<]+?)\s*<\/div>/)?.[1]?.trim();
+    if (name === username) {
+      const nodeId = block.match(/data-id="(\d+)"/)?.[1];
+      if (nodeId) return Number(nodeId);
+    }
+  }
+
+  return null;
 }
 
 export class FunpayClient {
@@ -150,7 +133,7 @@ export class FunpayClient {
   const response = await this.fetch(new URL(path, FUNPAY_URL), {
     headers: {
       Accept: 'text/html,application/xhtml+xml',
-      'User-Agent': 'pidorbot/1.0',
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
       Cookie: this._buildCookieHeader(),
       ...options.headers,
     },
@@ -205,52 +188,55 @@ export class FunpayClient {
 
   async getNewOrders() {
     const html = await this.request('orders/trade');
+    console.log('orders/trade length:', html.length);
+    console.log('tc-item count:', (html.match(/tc-item/g) || []).length);
+    console.log('sample:', html.slice(html.indexOf('tc-item') - 50, html.indexOf('tc-item') + 1500));
     return parseNewOrders(html);
   }
 
   // Messages
   async getNewMessages(chatPairs = []) {
-  const csrfToken = await this.getCsrfToken();
-  const appData = await this.getAppData();
-  const userId = appData.userId;
+    const csrfToken = await this.getCsrfToken();
+    const appData = await this.getAppData();
+    const userId = appData.userId;
 
-  const objects = [
-    {
-      type: 'chat_bookmarks',
-      id: String(userId),
-      tag: '',
-      data: chatPairs, // [[nodeId, lastMsgId], [nodeId, lastMsgId], ...]
-    },
-  ];
+    const objects = [
+      {
+        type: 'chat_bookmarks',
+        id: String(userId),
+        tag: '',
+        data: chatPairs, // [[nodeId, lastMsgId], [nodeId, lastMsgId], ...]
+      },
+    ];
 
-  const body = new URLSearchParams();
-  body.append('objects', JSON.stringify(objects));
-  body.append('request', 'false');
-  body.append('csrf_token', csrfToken);
+    const body = new URLSearchParams();
+    body.append('objects', JSON.stringify(objects));
+    body.append('request', 'false');
+    body.append('csrf_token', csrfToken);
 
-  const response = await this.fetch(new URL('/runner/', FUNPAY_URL), {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/x-www-form-urlencoded',
-      'User-Agent': 'pidorbot/1.0',
-      Cookie: this._buildCookieHeader(),
-      'X-Requested-With': 'XMLHttpRequest',
-      Origin: FUNPAY_URL,
-      Referer: `${FUNPAY_URL}chat/`,
-    },
-    body: body.toString(),
-  });
+    const response = await this.fetch(new URL('/runner/', FUNPAY_URL), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+        Cookie: this._buildCookieHeader(),
+        'X-Requested-With': 'XMLHttpRequest',
+        Origin: FUNPAY_URL,
+        Referer: `${FUNPAY_URL}chat/`,
+      },
+      body: body.toString(),
+    });
 
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`Chat poll failed: HTTP ${response.status}: ${text}`);
-  }
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(`Chat poll failed: HTTP ${response.status}: ${text}`);
+    }
 
-  const json = await response.json();
-  console.log('RAW JSON:', JSON.stringify(json, null, 2));
+    const json = await response.json();
+    if (json.error) throw new Error(`Chat poll error: ${json.error}`);
 
-  if (json.error) throw new Error(`Chat poll error: ${json.error}`);
-  return json;
+    if (json.error) throw new Error(`Chat poll error: ${json.error}`);
+      return parseChatResponse(json)
 }
 
   async getChatList() {
@@ -276,7 +262,7 @@ export class FunpayClient {
       method: 'POST',
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded',
-        'User-Agent': 'pidorbot/1.0',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
         Cookie: this._buildCookieHeader(),
         'X-Requested-With': 'XMLHttpRequest',
         Origin: FUNPAY_URL,
@@ -295,15 +281,8 @@ export class FunpayClient {
     return json;
   }
 
-  async getChatNodeId(buyerId) {
-    const html = await this.request(`chat/?node=${buyerId}`);
-    const match = html.match(/data-node=['"]([\d]+)['"]/);
-    if (match) return Number(match[1]);
-
-    // fallback: try to find in chat list
-    const listMatch = html.match(
-      new RegExp(`data-id=['"](\\d+)['"][^>]*data-user-id=['"]${buyerId}['"]`, 'i')
-    );
-    return listMatch ? Number(listMatch[1]) : null;
+    async getChatNodeId(buyerUsername) {
+    const html = await this.request('chat/');
+    return findNodeIdByUsername(html, buyerUsername);
   }
 }

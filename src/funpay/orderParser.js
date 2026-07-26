@@ -16,8 +16,14 @@ function getClassText(html, className) {
 }
 
 function getBuyerId(html) {
-  const match = html.match(/data-href=(['"])\/users\/(\d+)\/?\1/i);
+  const match = html.match(/data-href=(['"])[^'"]*\/users\/(\d+)\/?[^'"]*\1/i);
   return match ? Number(match[2]) : null;
+}
+
+function parsePrice(text) {
+  if (!text) return null;
+  const num = text.replace(/[^\d.,]/g, '').replace(',', '.');
+  return num ? Number(num) : null;
 }
 
 export function parseNewOrders(html) {
@@ -28,13 +34,14 @@ export function parseNewOrders(html) {
     const start = starts[index].index;
     const end = starts[index + 1]?.index ?? html.length;
     const row = html.slice(start, end);
-    const orderNumber = getClassText(row, 'tc-order')?.match(/#?(\d+)/)?.[1];
+    const orderNumber = getClassText(row, 'tc-order')?.replace(/^#/, '').trim();
     if (!orderNumber) continue;
 
     orders.push({
       funpayOrderId: orderNumber,
       buyerId: getBuyerId(row),
       buyerUsername: getClassText(row, 'media-user-name'),
+      price: parsePrice(getClassText(row, 'tc-price')),
       status: getClassText(row, 'tc-status'),
       description: getClassText(row, 'order-desc'),
       createdLabel: getClassText(row, 'tc-date-time'),

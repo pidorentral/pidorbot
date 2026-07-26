@@ -10,24 +10,41 @@ export function createChatPoller({
 } = {}) {
   let timer = null;
   let polling = false;
-  let lastEventId = 0;
+  let lastMsgIdByNode = new Map;
 
   async function pollOnce() {
     if (polling) return [];
     polling = true;
 
     try {
-      const messages = await client.getNewMessages(lastEventId);
+      const chats = await client.getNewMessages();
+      const newMessages = [];
 
-      if (messages.length > 0) {
-        // track the latest event id for next poll
-        const maxId = Math.max(...messages.map((m) => m.id || 0));
-        if (maxId > lastEventId) lastEventId = maxId;
+      for (const chat of chats) {
+        const prevId = lastMsgIdByNode.get(chat.nodeId) ?? chat.lastMsgId; 
+        // ^ при первом запуске просто запоминаем текущее состояние, чтобы не
+        //   среагировать на старую переписку задним числом
 
-        await onMessages(messages, logger);
+        if (!lastMsgIdByNode.has(chat.nodeId)) {
+          lastMsgIdByNode.set(chat.nodeId, chat.lastMsgId);
+          continue;
+        }
+
+        if (chat.lastMsgId > prevId) {
+          lastMsgIdByNode.set(chat.nodeId, chat.lastMsgId);
+          newMessages.push({
+            id: chat.lastMsgId,
+            nodeId: chat.nodeId,
+            author: chat.username,
+            text: chat.text,
+          });
+        }
+      }
+      if (newMessages.length > 0) {
+        await onMessages(newMessages, logger);
       }
 
-      return messages;
+      return newMessages;
     } catch (err) {
       if (err instanceof FunpayAuthError) {
         logger.error('FunPay session expired during chat poll');

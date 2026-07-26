@@ -36,26 +36,29 @@ export function createFunpayPoller({
   const seenOrderIds = new Set();
 
   async function pollOnce() {
-    if (polling) return [];
-    polling = true;
+  if (polling) return [];
+  polling = true;
 
-    try {
-      const orders = await client.getNewOrders();
-      const unseenOrders = orders.filter((order) => !seenOrderIds.has(order.funpayOrderId));
-      orders.forEach((order) => seenOrderIds.add(order.funpayOrderId));
+  try {
+    const orders = await client.getNewOrders();
+    const unseenOrders = orders.filter((order) => !seenOrderIds.has(order.funpayOrderId));
+    orders.forEach((order) => seenOrderIds.add(order.funpayOrderId));
 
-      if (!initialSnapshotLoaded) {
-        initialSnapshotLoaded = true;
-        logger.info(`FunPay observer started; existing new orders: ${orders.length}`);
-        return [];
-      }
-
-      if (unseenOrders.length) await onNewOrders(unseenOrders, logger);
-      return unseenOrders;
-    } finally {
-      polling = false;
+    if (!initialSnapshotLoaded) {
+      initialSnapshotLoaded = true;
+      logger.info(`FunPay observer started; existing new orders: ${orders.length}`);
+      // Раньше здесь было return [] — убираем этот ранний выход.
+      // Пусть даже на первом опросе заказы уходят в onNewOrders;
+      // идемпотентность (existing.status === 'fulfilled') в processOrder
+      // защитит от повторной обработки уже выполненных заказов.
     }
+
+    if (unseenOrders.length) await onNewOrders(unseenOrders, logger);
+    return unseenOrders;
+  } finally {
+    polling = false;
   }
+}
 
   function start() {
     if (timer) return;

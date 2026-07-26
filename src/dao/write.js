@@ -63,14 +63,31 @@ export async function createOrder({ funpayOrderId, buyer, accountId = null, pric
 }
 
 export async function reserveAccount({ accountId, buyer, endsAt, orderId = null, nodeId = null }) {
-  // ...existing code...
-  const rentalRes = await client.query(
-    `INSERT INTO rentals (account_id, buyer, order_id, ends_at, node_id, status, state)
-     VALUES ($1, $2, $3, $4, $5, 'active', 'active')
-     RETURNING *`,
-    [accountId, buyer, orderId, endsAt, nodeId]
-  );
-  // ...rest unchanged...
+  const client = await getClient();
+  try {
+    await client.query('BEGIN');
+
+    const rentalRes = await client.query(
+      `INSERT INTO rentals (account_id, buyer, order_id, ends_at, node_id, status, state)
+       VALUES ($1, $2, $3, $4, $5, 'active', 'active')
+       RETURNING *`,
+      [accountId, buyer, orderId, endsAt, nodeId]
+    );
+
+    // Важно: пометить аккаунт как занятый, иначе listAccounts снова выдаст его как "available"
+    await client.query(
+      `UPDATE accounts SET status = 'rented' WHERE id = $1`,
+      [accountId]
+    );
+
+    await client.query('COMMIT');
+    return rentalRes.rows[0];
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
 }
 
 export async function completeRental(rentalId) {

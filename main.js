@@ -18,8 +18,10 @@ const client = new FunpayClient();
 const logger = console;
 
 async function main() {
+  // console.log("BOT START")
   const bot = await launchBot();
-
+  
+  // console.log("BOT READY")
   const adminIds = (process.env.TG_ADMIN_IDS || '').split(',').map(Number).filter(Boolean);
   const notifyAdmin = async (text) => {
     for (const id of adminIds) {

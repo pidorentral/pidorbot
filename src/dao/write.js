@@ -401,19 +401,30 @@ export async function deleteAccount(accountId) {
   const client = await getClient();
   try {
     await client.query('BEGIN');
-    // Prevent deleting accounts that are referenced from rentals
+    // Check rentals referencing this account
     const refRes = await client.query(
-      `SELECT id, status FROM rentals WHERE account_id = $1 LIMIT 5`,
+      `SELECT id, status FROM rentals WHERE account_id = $1`,
       [accountId]
     );
 
     if (refRes.rows.length) {
-      await client.query('ROLLBACK');
-      const refs = refRes.rows.map((r) => `#${r.id}(${r.status})`).join(', ');
-      throw new Error(`Account is referenced by rentals: ${refs}`);
+      const active = refRes.rows.filter((r) => r.status === 'active');
+      if (active.length) {
+        await client.query('ROLLBACK');
+        const refs = active.map((r) => `#${r.id}(${r.status})`).join(', ');
+        throw new Error(`Account is referenced by active rentals: ${refs}`);
+      }
+
+      // Only historical/ended rentals reference the account — try to disassociate them.
+      try {
+        await client.query(`UPDATE rentals SET account_id = NULL WHERE account_id = $1`, [accountId]);
+      } catch (e) {
+        // If update fails (e.g., account_id is NOT NULL), fall back to deleting those rentals
+        await client.query(`DELETE FROM rentals WHERE account_id = $1`, [accountId]);
+      }
     }
 
-    // remove account (no referencing rentals found)
+    // remove account (no active rentals remain)
     await client.query(`DELETE FROM accounts WHERE id = $1`, [accountId]);
     await client.query('COMMIT');
     return { id: accountId };

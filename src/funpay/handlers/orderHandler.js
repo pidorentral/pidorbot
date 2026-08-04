@@ -57,7 +57,7 @@ async function processOrder(order, { client, logger, notifyAdmin }) {
     return true;
   }
 
-  // Создаём/обновляем заказ как "processing", а не сразу "fulfilled"
+  // Создаём/обновляем заказ как "paid", а не сразу "fulfilled"
   let dbOrder = existing;
 
   if (!dbOrder) {
@@ -65,7 +65,7 @@ async function processOrder(order, { client, logger, notifyAdmin }) {
           funpayOrderId,
           buyer,
           price,
-          status: 'processing'
+          status: 'paid'
       });
   }
 
@@ -74,10 +74,9 @@ async function processOrder(order, { client, logger, notifyAdmin }) {
 
   if (!nodeId) {
     logger.error(`Cannot find chat node for buyer: ${buyer} (id ${buyerId})`);
-    if (notifyAdmin) await notifyAdmin(`⚠️ Не нашёл чат с ${buyer}, заказ #${funpayOrderId} остался в processing`);
-    return; // статус остаётся 'processing' — заказ переобработается на следующем цикле
+      if (notifyAdmin) await notifyAdmin(`⚠️ Не нашёл чат с ${buyer}, заказ #${funpayOrderId} остался в paid`);
+      return; // статус остаётся 'paid' — заказ переобработается на следующем цикле
   }
-
   const endsAt = new Date(
     Date.now() + RENTAL_DURATION_HOURS * 60 * 60 * 1000
 );

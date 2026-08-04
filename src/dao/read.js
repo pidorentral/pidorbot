@@ -125,7 +125,7 @@ export async function getStats() {
       (SELECT COUNT(*) FROM accounts WHERE status = 'available') AS available,
       (SELECT COUNT(*) FROM accounts WHERE status = 'rented') AS rented,
       (SELECT COUNT(*) FROM rentals WHERE status = 'active') AS active_rentals,
-      (SELECT COUNT(*) FROM orders WHERE status IN ('new', 'processing', 'paid')) AS new_orders
+      (SELECT COUNT(*) FROM orders WHERE status IN ('new', 'paid', 'pending_no_account')) AS new_orders
     `
   );
   const r = res.rows[0];

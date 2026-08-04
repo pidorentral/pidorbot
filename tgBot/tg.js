@@ -145,6 +145,7 @@ export function createBot(config = getConfig()) {
       login: session.data.login,
       password: session.data.password,
       notes: null,
+      mmr: session.data.mmr,
     });
 
     if (session.data.sharedSecret) {
@@ -199,12 +200,28 @@ export function createBot(config = getConfig()) {
 
     console.log(`Admin ${ctx.from.id} viewed password for account #${account.id}`);
 
+    const currentMessageText = ctx.update?.callback_query?.message?.text;
+    const targetText = formatAccountCard(account, { showPassword: true });
+    if (currentMessageText === targetText) {
+      await safeAnswerCb(ctx);
+      return;
+    }
+
     await safeAnswerCb(ctx);
 
-    return ctx.editMessageText(
-      formatAccountCard(account, { showPassword: true }),
-      accountCardKeyboard(account),
-    );
+    try {
+      return ctx.editMessageText(
+        targetText,
+        accountCardKeyboard(account),
+      );
+    } catch (err) {
+      // Ignore message-not-modified and other edit failures for duplicate presses
+      const desc = err?.response?.description || err?.message || '';
+      if (typeof desc === 'string' && desc.includes('Message is not modified')) {
+        return;
+      }
+      throw err;
+    }
   });
 
   // Disable / enable flow: ask for confirmation
@@ -316,6 +333,7 @@ export function createBot(config = getConfig()) {
     if (session.data.login) updates.login = session.data.login;
     if (session.data.password && session.data.password.length > 0) updates.password = session.data.password;
     if (session.data.notes !== undefined) updates.notes = session.data.notes;
+    if (session.data.mmr !== undefined) updates.mmr = session.data.mmr;
 
     await updateAccount(session.accountId, updates);
     sessions.delete(ctx.from.id);
@@ -401,9 +419,15 @@ async function safeAnswerCb(ctx, ...args) {
     // use apply to preserve arguments
     await ctx.answerCbQuery(...args);
   } catch (err) {
-    // swallow Telegram "query is too old" / invalid callback errors
+    // swallow Telegram callback query errors
     const desc = err?.response?.description || err?.message || '';
-    if (typeof desc === 'string' && (desc.includes('query is too old') || desc.includes('query ID is invalid') || desc.includes('QUERY_ID')) ) {
+    if (typeof desc === 'string' && (
+      desc.includes('query is too old') ||
+      desc.includes('query ID is invalid') ||
+      desc.includes('QUERY_ID') ||
+      desc.includes('message is not modified') ||
+      desc.includes('Bad Request: query is too old')
+    )) {
       return;
     }
     // otherwise log and continue
@@ -453,6 +477,7 @@ function formatAccountCard(account, options = {}) {
     `Title: ${account.title}`,
     `Login: ${account.login}`,
     `Password: ${password}`,
+    `MMR: ${account.mmr ?? 'unknown'}`,
     `Status: ${account.status}`,
     `Steam Guard: ${account.sharedSecret || account.steamId ? 'connected' : 'not connected'}`,
   ].join('\n');
@@ -463,7 +488,7 @@ function formatAccountsList(accounts) {
     'Accounts:',
     '',
     ...accounts.map((account) => (
-      `#${account.id} ${account.title}\nStatus: ${account.status}`
+      `#${account.id} ${account.title}\nMMR: ${account.mmr ?? 'unknown'}\nStatus: ${account.status}`
     )),
   ].join('\n\n')
 }
@@ -527,6 +552,7 @@ function formatAddAccountConfirm(data) {
     `Title: ${data.title}`,
     `Login: ${data.login}`,
     `Password: ********`,
+    `MMR: ${data.mmr ?? 'none'}`,
     `Steam Guard: ${data.sharedSecret ? 'connected' : 'not_connected'}`,
     data.steamId ? `SteamID: ${data.steamId}` : null,
     '',
@@ -577,6 +603,11 @@ async function continueAddAccount(ctx, session) {
 
       case 'password':
         session.data.password = text;
+        session.step = 'mmr';
+        return ctx.reply('Enter MMR for this account (numeric):');
+
+      case 'mmr':
+        session.data.mmr = Number(text.replace(/\s+/g, '')) || null;
         session.step = 'mafile_choice';
         return ctx.reply(
           'Attach mafile now?',
@@ -641,6 +672,11 @@ async function continueAddAccount(ctx, session) {
 
       case 'password':
         session.data.password = text;
+        session.step = 'mmr';
+        return ctx.reply(`Enter MMR (current: ${session.data.mmr ?? 'none'}):`);
+
+      case 'mmr':
+        session.data.mmr = Number(text.replace(/\s+/g, '')) || null;
         session.step = 'notes';
         return ctx.reply(`Enter notes (current: ${session.data.notes || ''}):`);
 

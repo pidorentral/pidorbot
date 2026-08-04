@@ -1,14 +1,14 @@
 import { getClient, query } from '../db.js';
 import * as crypto from '../crypto.js';
 
-export async function addAccount({ title, login, password, notes = null }) {
+export async function addAccount({ title, login, password, notes = null, mmr = null }) {
   const encryptedPassword = crypto.encrypt(password);
 
   const res = await query(
-    `INSERT INTO accounts (title, login, password, notes, status)
-     VALUES ($1, $2, $3, $4, 'available')
-     RETURNING id, title, login, status, steam_id, mafile_id, notes, created_at`,
-    [title, login, encryptedPassword, notes]
+    `INSERT INTO accounts (title, login, password, notes, mmr, status)
+     VALUES ($1, $2, $3, $4, $5, 'available')
+     RETURNING id, title, login, status, steam_id, mafile_id, notes, mmr, created_at`,
+    [title, login, encryptedPassword, notes, mmr]
   );
 
   return res.rows[0];
@@ -55,18 +55,51 @@ export async function attachMafileToAccount(accountId, { sharedSecret, identityS
   }
 }
 
+function parseMmrFromText(text = '') {
+  const normalized = String(text || '').toLowerCase().replace(/\u00A0/g, ' ');
+  const match = normalized.match(/(\d[\d\s]*(?:[.,]\d+)?)\s*(k|к)?\b/);
+  if (!match) return null;
+
+  let value = match[1].replace(/\s+/g, '').replace(',', '.');
+  let mmr = Number(value);
+  if (!Number.isFinite(mmr)) return null;
+
+  if (match[2]) {
+    mmr = Math.round(mmr * 1000);
+  }
+
+  return Math.round(mmr);
+}
+
+function findAccountByMmr(accounts, desiredMmr) {
+  if (!desiredMmr) {
+    return accounts[0] || null;
+  }
+
+  return accounts.find((account) => {
+    if (account.mmr === desiredMmr) {
+      return true;
+    }
+    const titleMmr = parseMmrFromText(account.title);
+    if (titleMmr === desiredMmr) return true;
+    const notesMmr = parseMmrFromText(account.notes);
+    return notesMmr === desiredMmr;
+  }) || null;
+}
+
 export async function createOrder({
   funpayOrderId,
   buyer,
   accountId = null,
   price,
-  status = 'new'
+  status = 'new',
+  desiredMmr = null
 }) {
   const res = await query(
-    `INSERT INTO orders (funpay_order_id, buyer, account_id, price, status)
-     VALUES ($1, $2, $3, $4, $5)
+    `INSERT INTO orders (funpay_order_id, buyer, account_id, price, status, desired_mmr)
+     VALUES ($1, $2, $3, $4, $5, $6)
      RETURNING *`,
-    [funpayOrderId, buyer, accountId, price, status]
+    [funpayOrderId, buyer, accountId, price, status, desiredMmr]
   );
 
   return res.rows[0];
@@ -76,7 +109,8 @@ export async function ensureRental({
   buyer,
   endsAt,
   orderId,
-  nodeId
+  nodeId,
+  desiredMmr
 }) {
   const client = await getClient();
 
@@ -109,21 +143,33 @@ export async function ensureRental({
     }
 
     // Ищем свободный аккаунт
-    const accountRes = await client.query(
-      `SELECT *
-       FROM accounts
-       WHERE status = 'available'
-       ORDER BY id
-       LIMIT 1
-       FOR UPDATE SKIP LOCKED`
-    );
+    const queryText = desiredMmr
+      ? `SELECT *
+         FROM accounts
+         WHERE status = 'available'
+           AND (mmr = $1 OR mmr IS NULL)
+         ORDER BY id
+         LIMIT 200
+         FOR UPDATE SKIP LOCKED`
+      : `SELECT *
+         FROM accounts
+         WHERE status = 'available'
+         ORDER BY id
+         LIMIT 1
+         FOR UPDATE SKIP LOCKED`;
+
+    const accountRes = await client.query(queryText, desiredMmr ? [desiredMmr] : []);
 
     if (!accountRes.rows.length) {
       await client.query("ROLLBACK");
       return null;
     }
 
-    const account = accountRes.rows[0];
+    const account = findAccountByMmr(accountRes.rows, desiredMmr);
+    if (!account) {
+      await client.query("ROLLBACK");
+      return null;
+    }
 
     // Создаём аренду
     const rentalRes = await client.query(
@@ -321,6 +367,10 @@ export async function updateAccount(accountId, updates = {}) {
     fields.push(`notes = $${idx++}`);
     values.push(updates.notes);
   }
+  if (updates.mmr !== undefined) {
+    fields.push(`mmr = $${idx++}`);
+    values.push(updates.mmr);
+  }
 
   if (fields.length === 0) {
     const res = await query(`SELECT id, title, login, status, steam_id, notes FROM accounts WHERE id = $1`, [accountId]);
@@ -328,7 +378,7 @@ export async function updateAccount(accountId, updates = {}) {
   }
 
   values.push(accountId);
-  const sql = `UPDATE accounts SET ${fields.join(', ')} WHERE id = $${idx} RETURNING id, title, login, status, steam_id AS "steamId", notes`;
+  const sql = `UPDATE accounts SET ${fields.join(', ')} WHERE id = $${idx} RETURNING id, title, login, status, steam_id AS "steamId", notes, mmr`;
   const res = await query(sql, values);
   return res.rows[0] || null;
 }

@@ -44,7 +44,7 @@ export async function handleNewOrders(orders, logger, { client, notifyAdmin }) {
 }
 
 async function processOrder(order, { client, logger, notifyAdmin }) {
-  const { funpayOrderId, buyerId, buyerUsername: buyer, price, lotId } = order;
+  const { funpayOrderId, buyerId, buyerUsername: buyer, price, lotId, desiredMmr } = order;
 
   const existing = await getOrderByFunpayId(funpayOrderId);
   if (existing && existing.status === 'fulfilled') {
@@ -65,7 +65,8 @@ async function processOrder(order, { client, logger, notifyAdmin }) {
           funpayOrderId,
           buyer,
           price,
-          status: 'paid'
+          status: 'paid',
+          desiredMmr
       });
   }
 
@@ -85,7 +86,8 @@ async function processOrder(order, { client, logger, notifyAdmin }) {
       buyer,
       endsAt,
       orderId: dbOrder.id,
-      nodeId
+      nodeId,
+      desiredMmr
   });
 
   if (!reservation) {

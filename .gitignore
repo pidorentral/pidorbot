@@ -3,4 +3,4 @@
 .agents
 .vscode
 .continue
-node_modules
+node_modules/

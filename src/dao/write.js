@@ -416,11 +416,16 @@ export async function deleteAccount(accountId) {
       }
 
       // Only historical/ended rentals reference the account — try to disassociate them.
+      // Try to disassociate historical rentals using a SAVEPOINT. If the UPDATE fails
+      // (e.g., because account_id is NOT NULL), rollback to the savepoint and delete those rentals.
+      await client.query('SAVEPOINT unlink_rentals');
       try {
         await client.query(`UPDATE rentals SET account_id = NULL WHERE account_id = $1`, [accountId]);
+        await client.query('RELEASE SAVEPOINT unlink_rentals');
       } catch (e) {
-        // If update fails (e.g., account_id is NOT NULL), fall back to deleting those rentals
+        await client.query('ROLLBACK TO SAVEPOINT unlink_rentals');
         await client.query(`DELETE FROM rentals WHERE account_id = $1`, [accountId]);
+        await client.query('RELEASE SAVEPOINT unlink_rentals');
       }
     }
 

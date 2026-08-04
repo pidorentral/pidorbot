@@ -17,6 +17,9 @@ export async function addAccount({ title, login, password, notes = null }) {
 export async function attachMafileToAccount(accountId, { sharedSecret, identitySecret = null, rawJson }) {
   const encryptedShared = crypto.encrypt(sharedSecret);
   const encryptedIdentity = identitySecret ? crypto.encrypt(identitySecret) : null;
+  const encryptedRawJson = rawJson == null
+    ? null
+    : JSON.stringify(crypto.encrypt(JSON.stringify(rawJson)));
 
   const client = await getClient();
   try {
@@ -31,7 +34,7 @@ export async function attachMafileToAccount(accountId, { sharedSecret, identityS
                      raw_json = EXCLUDED.raw_json,
                      updated_at = NOW()
        RETURNING id`,
-      [accountId, encryptedShared, encryptedIdentity, rawJson]
+      [accountId, encryptedShared, encryptedIdentity, encryptedRawJson]
     );
 
     const mafileId = insertMafile.rows[0].id;
@@ -59,15 +62,6 @@ export async function createOrder({
   price,
   status = 'new'
 }) {
-
-  console.log({
-    funpayOrderId,
-    buyer,
-    accountId,
-    price,
-    status
-  });
-
   const res = await query(
     `INSERT INTO orders (funpay_order_id, buyer, account_id, price, status)
      VALUES ($1, $2, $3, $4, $5)
@@ -151,6 +145,14 @@ export async function ensureRental({
         endsAt,
         nodeId
       ]
+    );
+
+    // Помечаем заказ привязанным аккаунтом
+    await client.query(
+      `UPDATE orders
+       SET account_id = $1
+       WHERE id = $2`,
+      [account.id, orderId]
     );
 
     // Помечаем аккаунт занятым
@@ -331,12 +333,21 @@ export async function updateAccount(accountId, updates = {}) {
   return res.rows[0] || null;
 }
 
-export async function incrementCodeCount(rentalId) {
-  await query(`UPDATE rentals SET code_count = code_count + 1 WHERE id = $1`, [rentalId]);
-}
+export async function consumeCodeAllowance(rentalId, maxCodes) {
+  const res = await query(
+    `UPDATE rentals
+     SET code_count = code_count + 1,
+         state = CASE WHEN code_count + 1 >= $2 THEN 'locked' ELSE state END
+     WHERE id = $1
+       AND status = 'active'
+       AND state = 'active'
+       AND ends_at > NOW()
+       AND code_count < $2
+     RETURNING code_count AS "codeCount", state`,
+    [rentalId, maxCodes]
+  );
 
-export async function setRentalState(rentalId, state) {
-  await query(`UPDATE rentals SET state = $1 WHERE id = $2`, [state, rentalId]);
+  return res.rows[0] || null;
 }
 
 export async function updateOrder(orderId, updates = {}) {

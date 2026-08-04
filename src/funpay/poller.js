@@ -3,6 +3,7 @@ import { FunpayClient } from './client.js';
 
 const client = new FunpayClient();
 const DEFAULT_INTERVAL_MS = 5_000;
+const MAX_SEEN_ORDER_IDS = 1_000;
 
 function getIntervalMs(value = process.env.FUNPAY_POLL_INTERVAL_MS) {
   const interval = Number.parseInt(value || `${DEFAULT_INTERVAL_MS}`, 10);
@@ -34,6 +35,16 @@ export function createFunpayPoller({
   let polling = false;
   let initialSnapshotLoaded = false;
   const seenOrderIds = new Set();
+  const seenOrderIdQueue = [];
+
+  function rememberOrder(orderId) {
+    seenOrderIds.add(orderId);
+    seenOrderIdQueue.push(orderId);
+
+    if (seenOrderIdQueue.length > MAX_SEEN_ORDER_IDS) {
+      seenOrderIds.delete(seenOrderIdQueue.shift());
+    }
+  }
 
   async function pollOnce() {
   if (polling) return [];
@@ -42,7 +53,6 @@ export function createFunpayPoller({
   try {
     const orders = await client.getNewOrders();
     const unseenOrders = orders.filter((order) => !seenOrderIds.has(order.funpayOrderId));
-    orders.forEach((order) => seenOrderIds.add(order.funpayOrderId));
 
     if (!initialSnapshotLoaded) {
       initialSnapshotLoaded = true;
@@ -53,7 +63,16 @@ export function createFunpayPoller({
       // защитит от повторной обработки уже выполненных заказов.
     }
 
-    if (unseenOrders.length) await onNewOrders(unseenOrders, logger);
+    if (unseenOrders.length) {
+      const processedOrderIds = await onNewOrders(unseenOrders, logger);
+      const processedIds = new Set(processedOrderIds ?? unseenOrders.map((order) => order.funpayOrderId));
+
+      for (const order of unseenOrders) {
+        if (processedIds.has(order.funpayOrderId)) {
+          rememberOrder(order.funpayOrderId);
+        }
+      }
+    }
     return unseenOrders;
   } finally {
     polling = false;
@@ -81,4 +100,6 @@ async function logObservedOrders(orders, logger) {
   for (const order of orders) {
     logger.info(`FunPay order observed: #${order.funpayOrderId} (${order.status || 'unknown status'})`);
   }
+
+  return orders.map((order) => order.funpayOrderId);
 }

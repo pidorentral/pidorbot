@@ -129,26 +129,34 @@ export class FunpayClient {
     }
   }
 
+  async _requestResponse(path = '', options = {}) {
+    const { headers = {}, ...requestOptions } = options;
+    const response = await this.fetch(new URL(path, FUNPAY_URL), {
+      ...requestOptions,
+      redirect: 'follow',
+      headers: {
+        Accept: 'text/html,application/xhtml+xml',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+        Cookie: this._buildCookieHeader(),
+        ...headers,
+      },
+    });
+
+    this._captureSetCookies(response);
+    if (response.url.includes('/login') || response.url.includes('/auth')) throw new FunpayAuthError();
+    if (!response.ok) throw new Error(`FunPay request failed with HTTP ${response.status}`);
+    return response;
+  }
+
   async request(path = '', options = {}) {
-  const response = await this.fetch(new URL(path, FUNPAY_URL), {
-    headers: {
-      Accept: 'text/html,application/xhtml+xml',
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
-      Cookie: this._buildCookieHeader(),
-      ...options.headers,
-    },
-    redirect: 'follow',
-    ...options,
-  });
+    const response = await this._requestResponse(path, options);
+    return response.text();
+  }
 
-  if (!response.ok) throw new Error(`FunPay request failed with HTTP ${response.status}`);
-
-  this._captureSetCookies(response);
-
-  const html = await response.text();
-  if (response.url.includes('/login') || response.url.includes('/auth')) throw new FunpayAuthError();
-  return html;
-}
+  async requestJson(path, options = {}) {
+    const response = await this._requestResponse(path, options);
+    return response.json();
+  }
 
   // --- App data & CSRF ---
 
@@ -188,9 +196,6 @@ export class FunpayClient {
 
   async getNewOrders() {
     const html = await this.request('orders/trade');
-    console.log('orders/trade length:', html.length);
-    console.log('tc-item count:', (html.match(/tc-item/g) || []).length);
-    console.log('sample:', html.slice(html.indexOf('tc-item') - 50, html.indexOf('tc-item') + 1500));
     return parseNewOrders(html);
   }
 
@@ -214,9 +219,10 @@ export class FunpayClient {
     body.append('request', 'false');
     body.append('csrf_token', csrfToken);
 
-    const response = await this.fetch(new URL('/runner/', FUNPAY_URL), {
+    const json = await this.requestJson('/runner/', {
       method: 'POST',
       headers: {
+        Accept: 'application/json',
         'Content-Type': 'application/x-www-form-urlencoded',
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
         Cookie: this._buildCookieHeader(),
@@ -227,16 +233,8 @@ export class FunpayClient {
       body: body.toString(),
     });
 
-    if (!response.ok) {
-      const text = await response.text();
-      throw new Error(`Chat poll failed: HTTP ${response.status}: ${text}`);
-    }
-
-    const json = await response.json();
     if (json.error) throw new Error(`Chat poll error: ${json.error}`);
-
-    if (json.error) throw new Error(`Chat poll error: ${json.error}`);
-      return parseChatResponse(json)
+    return parseChatResponse(json);
 }
 
   async getChatList() {
@@ -258,9 +256,10 @@ export class FunpayClient {
       csrf_token: csrfToken,
     });
 
-    const response = await this.fetch(new URL('/runner/', FUNPAY_URL), {
+    const json = await this.requestJson('/runner/', {
       method: 'POST',
       headers: {
+        Accept: 'application/json',
         'Content-Type': 'application/x-www-form-urlencoded',
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
         Cookie: this._buildCookieHeader(),
@@ -271,12 +270,6 @@ export class FunpayClient {
       body: body.toString(),
     });
 
-    if (!response.ok) {
-      const text = await response.text().catch(() => '');
-      throw new Error(`FunPay chat send failed: HTTP ${response.status} ${text}`);
-    }
-
-    const json = await response.json();
     if (json.error) throw new Error(`FunPay chat error: ${json.error}`);
     return json;
   }

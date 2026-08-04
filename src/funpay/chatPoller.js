@@ -2,9 +2,17 @@ import { FunpayClient, FunpayAuthError } from './client.js';
 
 const DEFAULT_INTERVAL_MS = 10_000;
 
+export function getChatPollIntervalMs(value = process.env.FUNPAY_CHAT_POLL_MS) {
+  const interval = Number.parseInt(value || `${DEFAULT_INTERVAL_MS}`, 10);
+  if (!Number.isSafeInteger(interval) || interval < 2_000) {
+    throw new Error('FUNPAY_CHAT_POLL_MS must be an integer of at least 2000');
+  }
+  return interval;
+}
+
 export function createChatPoller({
   client = new FunpayClient(),
-  intervalMs = Number(process.env.FUNPAY_CHAT_POLL_MS) || DEFAULT_INTERVAL_MS,
+  intervalMs = getChatPollIntervalMs(),
   onMessages = logMessages,
   logger = console,
 } = {}) {
@@ -17,7 +25,8 @@ export function createChatPoller({
     polling = true;
 
     try {
-      const chats = await client.getNewMessages();
+      const chatPairs = [...lastMsgIdByNode.entries()];
+      const chats = await client.getNewMessages(chatPairs);
       const newMessages = [];
 
       for (const chat of chats) {

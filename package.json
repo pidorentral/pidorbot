@@ -1,10 +1,13 @@
 {
   "type": "module",
   "scripts": {
-    "start": "node main.js",
-    "dev": "node main.js",
-    "db:smoke": "node scripts/dbSmoke.js",
-    "funpay:check": "node scripts/funpayCheck.js"
+    "start": "node bootstrap.js",
+    "dev": "node bootstrap.js",
+    "test": "node --test",
+    "db:smoke": "node --env-file=.env scripts/dbSmoke.js",
+    "funpay:check": "node --env-file=.env scripts/funpayCheck.js",
+    "db:create-indexes": "node --env-file=.env scripts/createIndexes.js",
+    "db:encrypt-mafiles": "node --env-file=.env scripts/encryptMafilePayloads.js"
   },
   "dependencies": {
     "crypto": "^1.0.1",

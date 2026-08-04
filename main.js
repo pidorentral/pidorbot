@@ -1,35 +1,52 @@
-import dotenv from 'dotenv';
-import { fileURLToPath } from 'url';
-import { dirname, resolve } from 'path';
-
-const __dirname = dirname(fileURLToPath(import.meta.url));
-dotenv.config({ path: resolve(__dirname, '.env') });
-
-import { launchBot } from './tgBot/tg.js';
-import { createFunpayPoller, isFunpayPollingEnabled } from './src/funpay/poller.js';
-import { createChatPoller } from './src/funpay/chatPoller.js';
-import { createExpiryChecker } from './src/funpay/rentalExpiry.js';
-import { createCommandRouter } from './src/funpay/commandRouter.js';
-import { handleCodeCommand } from './src/funpay/handlers/codeHandler.js';
-import { handleNewOrders } from './src/funpay/handlers/orderHandler.js';
-import { FunpayClient } from './src/funpay/client.js';
+const [
+  { launchBot },
+  { createFunpayPoller, isFunpayPollingEnabled },
+  { createChatPoller },
+  { createExpiryChecker },
+  { createCommandRouter },
+  { handleCodeCommand },
+  { handleNewOrders },
+  { FunpayClient },
+  { close: closeDatabase },
+] = await Promise.all([
+  import('./tgBot/tg.js'),
+  import('./src/funpay/poller.js'),
+  import('./src/funpay/chatPoller.js'),
+  import('./src/funpay/rentalExpiry.js'),
+  import('./src/funpay/commandRouter.js'),
+  import('./src/funpay/handlers/codeHandler.js'),
+  import('./src/funpay/handlers/orderHandler.js'),
+  import('./src/funpay/client.js'),
+  import('./src/db.js'),
+]);
 
 const client = new FunpayClient();
 const logger = console;
 
 async function main() {
-  // console.log("BOT START")
   const bot = await launchBot();
+  const services = [];
+  let shuttingDown = false;
+
+  const shutdown = async (signal) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    logger.info(`Received ${signal}; stopping services...`);
+
+    for (const service of services) service.stop();
+    bot.stop(signal);
+    await closeDatabase();
+  };
+
+  process.once('SIGINT', () => void shutdown('SIGINT'));
+  process.once('SIGTERM', () => void shutdown('SIGTERM'));
   
-  // console.log("BOT READY")
   const adminIds = (process.env.TG_ADMIN_IDS || '').split(',').map(Number).filter(Boolean);
   const notifyAdmin = async (text) => {
     for (const id of adminIds) {
       await bot.telegram.sendMessage(id, text).catch(() => {});
     }
   };
-
-  console.log('FUNPAY_POLLING_ENABLED =', process.env.FUNPAY_POLLING_ENABLED);
 
   if (isFunpayPollingEnabled()) {
     const orderPoller = createFunpayPoller({
@@ -38,6 +55,7 @@ async function main() {
       logger,
     });
     orderPoller.start();
+    services.push(orderPoller);
 
     const router = createCommandRouter({
       '!code': handleCodeCommand,
@@ -53,11 +71,11 @@ async function main() {
       logger,
     });
     chatPoller.start();
+    services.push(chatPoller);
 
     const expiry = createExpiryChecker({ client, notifyAdmin, logger });
     expiry.start();
-
-    console.log('FunPay integration started: orders + chat + expiry');
+    services.push(expiry);
   } else {
     console.log('FunPay polling disabled. Set FUNPAY_POLLING_ENABLED=true to enable.');
   }

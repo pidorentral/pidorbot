@@ -10,7 +10,15 @@ import {
 } from "../../dao/write.js";
 import { generateSteamGuardCode } from '../../../steam/steamGuard.js';
 
-const RENTAL_DURATION_HOURS = Number(process.env.RENTAL_DURATION_HOURS) || 24;
+export function getRentalDurationHours(value = process.env.RENTAL_DURATION_HOURS) {
+  const duration = Number(value || 24);
+  if (!Number.isFinite(duration) || duration <= 0) {
+    throw new Error('RENTAL_DURATION_HOURS must be a positive number');
+  }
+  return duration;
+}
+
+const RENTAL_DURATION_HOURS = getRentalDurationHours();
 
 const ALLOWED_LOT_IDS = (process.env.FUNPAY_ALLOWED_LOT_IDS || '')
   .split(',')
@@ -18,17 +26,21 @@ const ALLOWED_LOT_IDS = (process.env.FUNPAY_ALLOWED_LOT_IDS || '')
   .filter(Boolean);
 
 export async function handleNewOrders(orders, logger, { client, notifyAdmin }) {
+  const processedOrderIds = [];
+
   for (const order of orders) {
     try {
-      await processOrder(order, { client, logger, notifyAdmin });
+      const processed = await processOrder(order, { client, logger, notifyAdmin });
+      if (processed) processedOrderIds.push(order.funpayOrderId);
     } catch (err) {
-      console.error(err);
-      // logger.error(`Failed to process order #${order.funpayOrderId}: ${err.message}`);
+      logger.error(`Failed to process order #${order.funpayOrderId}: ${err.message}`);
       if (notifyAdmin) {
         await notifyAdmin(`⚠️ Order #${order.funpayOrderId} failed: ${err.message}`);
       }
     }
   }
+
+  return processedOrderIds;
 }
 
 async function processOrder(order, { client, logger, notifyAdmin }) {
@@ -37,12 +49,12 @@ async function processOrder(order, { client, logger, notifyAdmin }) {
   const existing = await getOrderByFunpayId(funpayOrderId);
   if (existing && existing.status === 'fulfilled') {
     logger.info(`Order #${funpayOrderId} already fulfilled, skipping`);
-    return;
+    return true;
   }
 
   if (ALLOWED_LOT_IDS.length > 0 && !ALLOWED_LOT_IDS.includes(String(lotId))) {
     logger.info(`Order #${funpayOrderId} skipped: lot ${lotId} not in allowed list`);
-    return;
+    return true;
   }
 
   // Создаём/обновляем заказ как "processing", а не сразу "fulfilled"
@@ -53,7 +65,7 @@ async function processOrder(order, { client, logger, notifyAdmin }) {
           funpayOrderId,
           buyer,
           price,
-          status: "paid"
+          status: 'processing'
       });
   }
 
@@ -96,11 +108,6 @@ async function processOrder(order, { client, logger, notifyAdmin }) {
     includeSecrets: true
   });
 
-  console.log({
-    id: fullAccount.id,
-    login: fullAccount.login,
-    sharedSecret: fullAccount.sharedSecret
-  });
   const code = generateSteamGuardCode(fullAccount.sharedSecret);
 
   const message = [
@@ -118,10 +125,11 @@ async function processOrder(order, { client, logger, notifyAdmin }) {
 
   await client.sendMessage(nodeId, message);
 
-  await updateOrder(dbOrder.id, { status : 'fulfilled'});
+  await updateOrder(dbOrder.id, { status: 'fulfilled' });
 
   logger.info(
     `Order #${funpayOrderId}: account #${account.id} reserved for ${buyer} until ${new Date(rental.ends_at).toISOString()}`
   );
   if (notifyAdmin) await notifyAdmin(`✅ Заказ #${funpayOrderId}: аккаунт #${account.id} выдан ${buyer}`);
+  return true;
 }

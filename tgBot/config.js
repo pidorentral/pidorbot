@@ -1,7 +1,3 @@
-import dotenv from 'dotenv';
-
-dotenv.config();
-
 export function getConfig() {
   const botToken = process.env.BOT_TOKEN;
   const adminIds = parseAdminIds(process.env.TG_ADMIN_IDS);

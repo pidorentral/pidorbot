@@ -2,9 +2,22 @@ import { query, getClient } from '../db.js';
 import * as crypto from '../crypto.js';
 import { generatePassword } from './utils.js';
 
-const CHECK_INTERVAL_MS = Number(process.env.RENTAL_EXPIRY_CHECK_MS) || 30_000;
+const DEFAULT_CHECK_INTERVAL_MS = 30_000;
 
-export function createExpiryChecker({ client, notifyAdmin, logger = console } = {}) {
+export function getExpiryCheckIntervalMs(value = process.env.RENTAL_EXPIRY_CHECK_MS) {
+  const interval = Number.parseInt(value || `${DEFAULT_CHECK_INTERVAL_MS}`, 10);
+  if (!Number.isSafeInteger(interval) || interval < 2_000) {
+    throw new Error('RENTAL_EXPIRY_CHECK_MS must be an integer of at least 2000');
+  }
+  return interval;
+}
+
+export function createExpiryChecker({
+  client,
+  notifyAdmin,
+  logger = console,
+  intervalMs = getExpiryCheckIntervalMs(),
+} = {}) {
   let timer = null;
 
   async function checkOnce() {
@@ -32,11 +45,11 @@ export function createExpiryChecker({ client, notifyAdmin, logger = console } = 
 
   function start() {
     if (timer) return;
-    logger.info(`Rental expiry checker started (interval: ${CHECK_INTERVAL_MS}ms)`);
+    logger.info(`Rental expiry checker started (interval: ${intervalMs}ms)`);
     void checkOnce().catch((e) => logger.error(`Expiry check error: ${e.message}`));
     timer = setInterval(() => {
       void checkOnce().catch((e) => logger.error(`Expiry check error: ${e.message}`));
-    }, CHECK_INTERVAL_MS);
+    }, intervalMs);
   }
 
   function stop() {
@@ -55,10 +68,20 @@ async function expireRental(rental, { client, notifyAdmin, logger }) {
     await dbClient.query('BEGIN');
 
     // 1. Завершить аренду
-    await dbClient.query(
-      `UPDATE rentals SET status = 'ended', state = 'completed' WHERE id = $1`,
+    const expiredRental = await dbClient.query(
+      `UPDATE rentals
+       SET status = 'ended', state = 'completed'
+       WHERE id = $1
+         AND status = 'active'
+         AND ends_at <= NOW()
+       RETURNING id, account_id AS "accountId"`,
       [rental.id]
     );
+
+    if (!expiredRental.rows.length) {
+      await dbClient.query('COMMIT');
+      return false;
+    }
 
     // 2. Сгенерировать новый пароль и обновить аккаунт
     const newPassword = generatePassword();

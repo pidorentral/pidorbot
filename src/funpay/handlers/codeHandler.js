@@ -1,5 +1,6 @@
 import { generateSteamGuardCode } from '../../../steam/steamGuard.js';
-import { getAccountById, getActiveRentalByNodeId, incrementCodeCount, setRentalState } from '../../dao/read.js';
+import { getAccountById, getActiveRentalByNodeId } from '../../dao/read.js';
+import { consumeCodeAllowance } from '../../dao/write.js';
 
 const MAX_CODES = 5; // лимит кодов до автолока
 
@@ -30,7 +31,6 @@ export async function handleCodeCommand({ message, ctx }) {
   if (rental.codeCount >= MAX_CODES) {
     await client.sendMessage(nodeId, 'Лимит кодов исчерпан. Обратитесь к продавцу.');
     // автолок
-    await setRentalState(rental.id, 'locked');
     return;
   }
 
@@ -42,9 +42,14 @@ export async function handleCodeCommand({ message, ctx }) {
     return;
   }
 
+  const codeAllowance = await consumeCodeAllowance(rental.id, MAX_CODES);
+  if (!codeAllowance) {
+    await client.sendMessage(nodeId, 'Лимит кодов исчерпан или аренда уже завершена. Обратитесь к продавцу.');
+    return;
+  }
+
   const code = generateSteamGuardCode(account.sharedSecret);
   await client.sendMessage(nodeId, `Код: ${code}`);
-  await incrementCodeCount(rental.id);
 
-  logger.info(`Code sent for rental #${rental.id} (${rental.codeCount + 1}/${MAX_CODES})`);
+  logger.info(`Code sent for rental #${rental.id} (${codeAllowance.codeCount}/${MAX_CODES})`);
 }

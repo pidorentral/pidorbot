@@ -371,15 +371,8 @@ export function createBot(config = getConfig()) {
 export async function launchBot() {
   const bot = createBot();
 
-  // console.log('TG: setMyCommands...');
   await bot.telegram.setMyCommands(COMMANDS);
-  // console.log('TG: commands ready');
 
-  // console.log('TG: launch...');
-  // bot.launch() не резолвится, пока поллинг не остановлен —
-  // внутри Telegraf это бесконечный цикл. await здесь навсегда
-  // блокирует main(), поэтому FunPay-интеграция после launchBot()
-  // никогда не запускалась.
   bot.launch().catch((err) => {
     console.error('Bot launch failed:', err);
     process.exit(1);

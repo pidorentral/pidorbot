@@ -42,10 +42,13 @@ export async function getOrderByFunpayId(funpayOrderId) {
 }
 
 export async function getAccountById(id, { includeSecrets = false } = {}) {
+  const secrets = includeSecrets
+    ? ', a.password, m.shared_secret, m.identity_secret'
+    : '';
+
   const res = await query(
     `
-        SELECT a.id, a.title, a.login, a.status, a.steam_id AS "steamId", a.mafile_id AS "mafileId", a.notes, a.created_at AS "createdAt", a.password,
-          m.shared_secret, m.identity_secret, m.raw_json AS "rawJson"
+    SELECT a.id, a.title, a.login, a.status, a.steam_id AS "steamId", a.mafile_id AS "mafileId", a.notes, a.created_at AS "createdAt"${secrets}
     FROM accounts a
     LEFT JOIN mafiles m ON m.id = a.mafile_id
     WHERE a.id = $1
@@ -55,35 +58,32 @@ export async function getAccountById(id, { includeSecrets = false } = {}) {
 
   const row = res.rows[0] || null;
   if (!row) return null;
+  if (!includeSecrets) return row;
 
-  if (includeSecrets) {
-    if (row.shared_secret) {
-      try {
-        row.sharedSecret = crypto.decrypt(row.shared_secret);
-      } catch {
-        row.sharedSecret = null;
-      }
-    }
-
-    if (row.identity_secret) {
-      try {
-        row.identitySecret = crypto.decrypt(row.identity_secret);
-      } catch {
-        row.identitySecret = null;
-      }
-    }
-
-    // decrypt password if present
-    if (row.password) {
-      try {
-        row.password = crypto.decrypt(row.password);
-      } catch {
-        row.password = null;
-      }
+  if (row.shared_secret) {
+    try {
+      row.sharedSecret = crypto.decrypt(row.shared_secret);
+    } catch {
+      row.sharedSecret = null;
     }
   }
 
-  // remove raw encrypted fields
+  if (row.identity_secret) {
+    try {
+      row.identitySecret = crypto.decrypt(row.identity_secret);
+    } catch {
+      row.identitySecret = null;
+    }
+  }
+
+  if (row.password) {
+    try {
+      row.password = crypto.decrypt(row.password);
+    } catch {
+      row.password = null;
+    }
+  }
+
   delete row.shared_secret;
   delete row.identity_secret;
   return row;
@@ -125,7 +125,7 @@ export async function getStats() {
       (SELECT COUNT(*) FROM accounts WHERE status = 'available') AS available,
       (SELECT COUNT(*) FROM accounts WHERE status = 'rented') AS rented,
       (SELECT COUNT(*) FROM rentals WHERE status = 'active') AS active_rentals,
-      (SELECT COUNT(*) FROM orders WHERE status = 'new') AS new_orders
+      (SELECT COUNT(*) FROM orders WHERE status IN ('new', 'processing', 'paid')) AS new_orders
     `
   );
   const r = res.rows[0];
@@ -141,27 +141,13 @@ export async function getStats() {
 export async function getActiveRentalByNodeId(nodeId) {
   const res = await query(
     `SELECT id, account_id AS "accountId", buyer, node_id AS "nodeId",
-            state, code_count AS "codeCount", ends_at AS "endsAt"
+      state, code_count AS "codeCount", ends_at AS "endsAt"
      FROM rentals
      WHERE node_id = $1 AND status = 'active'
      LIMIT 1`,
     [nodeId]
   );
   return res.rows[0] || null;
-}
-
-export async function incrementCodeCount(rentalId) {
-  await query(
-    `UPDATE rentals SET code_count = code_count + 1 WHERE id = $1`,
-    [rentalId]
-  );
-}
-
-export async function setRentalState(rentalId, state) {
-  await query(
-    `UPDATE rentals SET state = $1 WHERE id = $2`,
-    [state, rentalId]
-  );
 }
 
 export async function getRentalByOrderId(orderId) {

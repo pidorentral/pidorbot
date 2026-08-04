@@ -289,8 +289,25 @@ export function createBot(config = getConfig()) {
   bot.action(/^acc_delete_confirm:(\d+)$/, async (ctx) => {
     const accountId = Number(ctx.match[1]);
     await safeAnswerCb(ctx);
-    await deleteAccount(accountId);
-    return ctx.editMessageText(`Account #${accountId} deleted.`, mainMenu());
+    try {
+      await deleteAccount(accountId);
+      return ctx.editMessageText(`Account #${accountId} deleted.`, mainMenu());
+    } catch (err) {
+      // If delete failed due to existing rentals, show friendly message and the account card
+      console.error('deleteAccount failed', err?.message || err);
+      const account = await getAccountById(accountId, { includeSecrets: true }).catch(() => null);
+      const message = err?.message && typeof err.message === 'string' && err.message.includes('referenced by rentals')
+        ? `Cannot delete account: it is referenced by active or historical rentals. End or remove rentals first. (${err.message})`
+        : `Failed to delete account: ${err?.message || 'unknown error'}`;
+
+      if (account) {
+        await safeAnswerCb(ctx);
+        return ctx.editMessageText(message, accountCardKeyboard(account));
+      }
+
+      await safeAnswerCb(ctx);
+      return ctx.editMessageText(message, mainMenu());
+    }
   });
 
   bot.action(/^acc_delete_cancel:(\d+)$/, async (ctx) => {

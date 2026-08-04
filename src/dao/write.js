@@ -105,12 +105,69 @@ export async function createOrder({
   return res.rows[0];
 }
 
+function normalizeTextForMatch(text = '') {
+  return String(text || '')
+    .toLowerCase()
+    .replace(/\u00A0/g, ' ')
+    .replace(/[^a-z0-9а-яё\s]/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function titleSimilarity(a = '', b = '') {
+  const na = normalizeTextForMatch(a).split(' ').filter(Boolean);
+  const nb = normalizeTextForMatch(b).split(' ').filter(Boolean);
+  if (!na.length || !nb.length) return 0;
+  const aset = new Set(na);
+  let common = 0;
+  for (const w of nb) if (aset.has(w)) common++;
+  // similarity measured as common / words in desired (b)
+  return common / nb.length;
+}
+
+function findAccountByTitle(accounts, desiredTitle) {
+  if (!desiredTitle) return null;
+  function normalizeForEquality(text = '') {
+    return normalizeTextForMatch(String(text || ''))
+      // remove numbers and mmr/k tokens which usually encode strength
+      .replace(/\b(\d+|k|к|ммр|mmr)\b/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  const desiredEq = normalizeForEquality(desiredTitle);
+  if (desiredEq) {
+    for (const acc of accounts) {
+      const accEq = normalizeForEquality(acc.title || '') || normalizeForEquality(acc.notes || '');
+      if (accEq === desiredEq) {
+        acc._matchReason = 'exactNormalizedTitle';
+        acc._matchScore = 1;
+        return acc;
+      }
+    }
+  }
+  let best = null;
+  let bestScore = 0;
+  for (const acc of accounts) {
+    const score = (titleSimilarity(acc.title || '', desiredTitle) || titleSimilarity(acc.notes || '', desiredTitle)) || 0;
+    if (score > bestScore) {
+      bestScore = score;
+      best = acc;
+    }
+  }
+  // require reasonable match
+  if (best) best._matchScore = bestScore;
+  if (best && !best._matchReason) best._matchReason = 'fuzzy';
+  if (bestScore >= 0.5) return best;
+  return null;
+}
+
 export async function ensureRental({
   buyer,
   endsAt,
   orderId,
   nodeId,
-  desiredMmr
+  desiredTitle
 }) {
   const client = await getClient();
 
@@ -142,33 +199,45 @@ export async function ensureRental({
       };
     }
 
-    // Ищем свободный аккаунт
-    const queryText = desiredMmr
-      ? `SELECT *
+
+    // Ищем свободные аккаунты (более широкий набор для сравнения по тайтлу)
+    const accountRes = await client.query(
+      `SELECT *
          FROM accounts
          WHERE status = 'available'
-           AND (mmr = $1 OR mmr IS NULL)
          ORDER BY id
          LIMIT 200
          FOR UPDATE SKIP LOCKED`
-      : `SELECT *
-         FROM accounts
-         WHERE status = 'available'
-         ORDER BY id
-         LIMIT 1
-         FOR UPDATE SKIP LOCKED`;
-
-    const accountRes = await client.query(queryText, desiredMmr ? [desiredMmr] : []);
+    );
 
     if (!accountRes.rows.length) {
       await client.query("ROLLBACK");
       return null;
     }
 
-    const account = findAccountByMmr(accountRes.rows, desiredMmr);
+    // Подбор исключительно по тайтлу (если указан), иначе берём первый доступный
+    let account = null;
+    if (desiredTitle) {
+      account = findAccountByTitle(accountRes.rows, desiredTitle);
+    } else {
+      account = accountRes.rows[0] || null;
+    }
+
     if (!account) {
       await client.query("ROLLBACK");
       return null;
+    }
+
+    // Логируем причину выбора аккаунта
+    try {
+      if (desiredTitle && account._matchScore !== undefined) {
+        const reason = account._matchReason ? `reason=${account._matchReason}` : '';
+        console.info(`ensureRental: selected account #${account.id} (${account.title}) by title match score=${account._matchScore} ${reason}`);
+      } else {
+        console.info(`ensureRental: selected account #${account.id} (${account.title}) as first available`);
+      }
+    } catch (e) {
+      // logging must not break flow
     }
 
     // Создаём аренду
@@ -332,7 +401,19 @@ export async function deleteAccount(accountId) {
   const client = await getClient();
   try {
     await client.query('BEGIN');
-    // remove mafile if exists (ON DELETE CASCADE on mafiles.account_id? we use cascade in schema)
+    // Prevent deleting accounts that are referenced from rentals
+    const refRes = await client.query(
+      `SELECT id, status FROM rentals WHERE account_id = $1 LIMIT 5`,
+      [accountId]
+    );
+
+    if (refRes.rows.length) {
+      await client.query('ROLLBACK');
+      const refs = refRes.rows.map((r) => `#${r.id}(${r.status})`).join(', ');
+      throw new Error(`Account is referenced by rentals: ${refs}`);
+    }
+
+    // remove account (no referencing rentals found)
     await client.query(`DELETE FROM accounts WHERE id = $1`, [accountId]);
     await client.query('COMMIT');
     return { id: accountId };

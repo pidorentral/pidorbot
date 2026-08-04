@@ -82,13 +82,14 @@ async function processOrder(order, { client, logger, notifyAdmin }) {
     Date.now() + RENTAL_DURATION_HOURS * 60 * 60 * 1000
 );
 
-  const reservation = await ensureRental({
+    const reservation = await ensureRental({
       buyer,
       endsAt,
       orderId: dbOrder.id,
       nodeId,
-      desiredMmr
-  });
+      desiredMmr,
+      desiredTitle: order.description || order.title || null
+    });
 
   if (!reservation) {
 

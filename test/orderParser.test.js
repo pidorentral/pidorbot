@@ -23,6 +23,8 @@ test('parses new FunPay orders from trade page markup', () => {
     status: 'Paid',
     description: 'Steam account',
     desiredMmr: null,
+    lotId: null,
+    lotCount: 1,
     createdLabel: 'today',
   }]);
 });
@@ -48,6 +50,62 @@ test('parses desiredMmr from order description', () => {
     status: 'Paid',
     description: 'Dota 2 аккаунт 5к ММР',
     desiredMmr: 5000,
+    lotId: null,
+    lotCount: 1,
+    createdLabel: 'today',
+  }]);
+});
+
+test('parses lot count from order description', () => {
+  const html = `
+    <div class="tc-item info">
+      <div class="tc-order">#GHI-789</div>
+      <a data-href="/users/100/"></a>
+      <div class="media-user-name">buyer_name</div>
+      <div class="tc-price">999 ₽</div>
+      <div class="tc-status">Paid</div>
+      <div class="order-desc">Steam account x2</div>
+      <div class="tc-date-time">today</div>
+    </div>
+  `;
+
+  assert.deepEqual(parseNewOrders(html), [{
+    funpayOrderId: 'GHI-789',
+    buyerId: 100,
+    buyerUsername: 'buyer_name',
+    price: 999,
+    status: 'Paid',
+    description: 'Steam account x2',
+    desiredMmr: null,
+    lotId: null,
+    lotCount: 2,
+    createdLabel: 'today',
+  }]);
+});
+
+test('parses lot id from order link', () => {
+  const html = `
+    <div class="tc-item info">
+      <div class="tc-order">#JKL-012</div>
+      <a href="https://funpay.com/offer/123456/"></a>
+      <div class="media-user-name">buyer_name</div>
+      <div class="tc-price">1 500 ₽</div>
+      <div class="tc-status">Paid</div>
+      <div class="order-desc">Steam account</div>
+      <div class="tc-date-time">today</div>
+    </div>
+  `;
+
+  assert.deepEqual(parseNewOrders(html), [{
+    funpayOrderId: 'JKL-012',
+    buyerId: null,
+    buyerUsername: 'buyer_name',
+    price: 1500,
+    status: 'Paid',
+    description: 'Steam account',
+    desiredMmr: null,
+    lotId: 123456,
+    lotCount: 1,
     createdLabel: 'today',
   }]);
 });

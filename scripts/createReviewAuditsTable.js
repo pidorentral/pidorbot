@@ -11,13 +11,19 @@ async function run() {
   try {
     await client.query('BEGIN');
 
-    await client.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS desired_mmr INTEGER`);
-    await client.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS lot_id TEXT`);
-    await client.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS lot_count INTEGER DEFAULT 1`);
-    await client.query(`ALTER TABLE accounts ADD COLUMN IF NOT EXISTS mmr INTEGER`);
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS review_audits (
+        id SERIAL PRIMARY KEY,
+        review_id INTEGER REFERENCES reviews(id) ON DELETE CASCADE,
+        action TEXT NOT NULL,
+        performed_by TEXT,
+        performed_at TIMESTAMPTZ DEFAULT NOW(),
+        details JSONB
+      )
+    `);
 
     await client.query('COMMIT');
-    console.log('Added desired_mmr to orders and mmr to accounts');
+    console.log('Created review_audits table');
   } catch (err) {
     await client.query('ROLLBACK');
     console.error('Migration failed:', err);

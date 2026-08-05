@@ -93,13 +93,15 @@ export async function createOrder({
   accountId = null,
   price,
   status = 'new',
-  desiredMmr = null
+  desiredMmr = null,
+  lotId = null,
+  lotCount = 1,
 }) {
   const res = await query(
-    `INSERT INTO orders (funpay_order_id, buyer, account_id, price, status, desired_mmr)
-     VALUES ($1, $2, $3, $4, $5, $6)
+    `INSERT INTO orders (funpay_order_id, buyer, account_id, price, status, desired_mmr, lot_id, lot_count)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
      RETURNING *`,
-    [funpayOrderId, buyer, accountId, price, status, desiredMmr]
+    [funpayOrderId, buyer, accountId, price, status, desiredMmr, lotId, lotCount]
   );
 
   return res.rows[0];
@@ -386,6 +388,107 @@ export async function cancelRental(rentalId) {
     throw err;
   } finally {
     client.release();
+  }
+}
+
+export async function createReview({ orderId, userId = null, platform = null, rating = null, text = null, link = null }) {
+  const res = await query(
+    `INSERT INTO reviews (order_id, user_id, platform, rating, text, link_or_screenshot)
+     VALUES ($1,$2,$3,$4,$5,$6)
+     RETURNING *`,
+    [orderId, userId, platform, rating, text, link]
+  );
+  return res.rows[0];
+}
+
+export async function getReviewById(reviewId) {
+  const res = await query(`SELECT * FROM reviews WHERE id = $1`, [reviewId]);
+  return res.rows[0] || null;
+}
+
+export async function verifyReviewAndGrantBonus(reviewId, verifier = 'admin') {
+  const client = await getClient();
+  try {
+    await client.query('BEGIN');
+
+    const r = await client.query(`SELECT * FROM reviews WHERE id = $1 FOR UPDATE`, [reviewId]);
+    if (!r.rows.length) throw new Error('Review not found');
+    const review = r.rows[0];
+
+    if (review.verified_at) {
+      // Already verified — idempotent return (no-op)
+      return { reviewId, alreadyVerified: true };
+    }
+
+    // Ensure no other review for this order was already verified
+    const prev = await client.query(`SELECT id FROM reviews WHERE order_id = $1 AND verified_at IS NOT NULL`, [review.order_id]);
+    if (prev.rows.length) {
+      throw new Error('Bonus already granted for this order');
+    }
+
+    // Grant bonus: extend active rental for this order by 1 hour
+    const bonusRes = await client.query(
+      `UPDATE rentals
+       SET ends_at = ends_at + INTERVAL '1 hour'
+       WHERE order_id = $1 AND status = 'active'
+       RETURNING id, ends_at`,
+      [review.order_id]
+    );
+
+    // Mark review as verified
+    await client.query(
+      `UPDATE reviews SET verified_by = $1, verified_at = NOW() WHERE id = $2`,
+      [verifier, reviewId]
+    );
+
+    // Insert audit row
+    await client.query(
+      `INSERT INTO review_audits (review_id, action, performed_by, details)
+       VALUES ($1, $2, $3, $4)`,
+      [reviewId, 'verify', verifier, JSON.stringify({ grantedRentalId: bonusRes.rows[0]?.id || null })]
+    );
+
+    await client.query('COMMIT');
+    return { reviewId, rental: bonusRes.rows[0] || null };
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+export async function rejectReview(reviewId, verifier = 'admin', reason = null) {
+  const client = await getClient();
+  try {
+    await client.query('BEGIN');
+
+    const r = await client.query(`SELECT * FROM reviews WHERE id = $1 FOR UPDATE`, [reviewId]);
+    if (!r.rows.length) throw new Error('Review not found');
+    const review = r.rows[0];
+
+    if (review.verified_at) {
+      return { reviewId, alreadyVerified: true };
+    }
+
+    await client.query(
+      `UPDATE reviews SET verified_by = $1, verified_at = NOW() WHERE id = $2`,
+      [verifier, reviewId]
+    );
+
+    await client.query(
+      `INSERT INTO review_audits (review_id, action, performed_by, details)
+       VALUES ($1, $2, $3, $4)`,
+      [reviewId, 'reject', verifier, JSON.stringify({ reason })]
+   );
+
+    await client.query('COMMIT');
+    return { reviewId, rejected: true };
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+   client.release();
   }
 }
 

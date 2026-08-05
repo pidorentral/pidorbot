@@ -33,6 +33,34 @@ export async function createOrder(payload) {
   return writeDao.createOrder(payload);
 }
 
+export async function createReview(payload) {
+  return writeDao.createReview(payload);
+}
+
+export async function getPendingReviews(limit = 50) {
+  return readDao.getPendingReviews(limit);
+}
+
+export async function getReviewById(id) {
+  return readDao.getReviewById(id);
+}
+
+export async function verifyReview(reviewId, verifier = 'admin') {
+  return writeDao.verifyReviewAndGrantBonus(reviewId, verifier);
+}
+
+export async function rejectReview(reviewId, verifier = 'admin', reason = null) {
+  return writeDao.rejectReview(reviewId, verifier, reason);
+}
+
+export async function getOrderByFunpayId(funpayOrderId) {
+  return readDao.getOrderByFunpayId(funpayOrderId);
+}
+
+export async function getOrderById(id) {
+  return readDao.getOrderById(id);
+}
+
 export async function completeRental(rentalId) {
   return writeDao.completeRental(rentalId);
 }
@@ -63,9 +91,15 @@ export default {
   addAccount,
   attachMafileToAccount,
   createOrder,
+  getOrderByFunpayId,
+  getOrderById,
   completeRental,
   cancelRental,
   setAccountStatus,
   deleteAccount,
   updateAccount,
+  createReview,
+  getPendingReviews,
+  getReviewById,
+  verifyReview,
 };

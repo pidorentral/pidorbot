@@ -44,13 +44,16 @@ export async function handleNewOrders(orders, logger, { client, notifyAdmin }) {
 }
 
 async function processOrder(order, { client, logger, notifyAdmin }) {
-  const { funpayOrderId, buyerId, buyerUsername: buyer, price, lotId, desiredMmr } = order;
+  const { funpayOrderId, buyerId, buyerUsername: buyer, price, lotId, desiredMmr, lotCount = 1 } = order;
 
   const existing = await getOrderByFunpayId(funpayOrderId);
   if (existing && existing.status === 'fulfilled') {
     logger.info(`Order #${funpayOrderId} already fulfilled, skipping`);
     return true;
   }
+
+  const quantity = Math.max(1, Number.isFinite(Number(lotCount)) ? Number(lotCount) : 1);
+  const rentalHours = RENTAL_DURATION_HOURS * quantity;
 
   if (ALLOWED_LOT_IDS.length > 0 && !ALLOWED_LOT_IDS.includes(String(lotId))) {
     logger.info(`Order #${funpayOrderId} skipped: lot ${lotId} not in allowed list`);
@@ -66,7 +69,9 @@ async function processOrder(order, { client, logger, notifyAdmin }) {
           buyer,
           price,
           status: 'paid',
-          desiredMmr
+          desiredMmr,
+          lotId,
+          lotCount: quantity,
       });
   }
 
@@ -78,9 +83,7 @@ async function processOrder(order, { client, logger, notifyAdmin }) {
       if (notifyAdmin) await notifyAdmin(`⚠️ Не нашёл чат с ${buyer}, заказ #${funpayOrderId} остался в paid`);
       return; // статус остаётся 'paid' — заказ переобработается на следующем цикле
   }
-  const endsAt = new Date(
-    Date.now() + RENTAL_DURATION_HOURS * 60 * 60 * 1000
-);
+  const endsAt = new Date(Date.now() + rentalHours * 60 * 60 * 1000);
 
     const reservation = await ensureRental({
       buyer,
@@ -120,6 +123,7 @@ async function processOrder(order, { client, logger, notifyAdmin }) {
     `Steam Guard: ${code}`,
     ``,
     `Для получения нового кода напишите !code`,
+    quantity > 1 ? `Аренда на ${rentalHours} часов (${RENTAL_DURATION_HOURS} × ${quantity})` : `Аренда на ${RENTAL_DURATION_HOURS} часов`,
     `Аренда до: ${new Date(rental.ends_at).toLocaleString('ru-RU', {
       timeZone: 'Europe/Kiev'
     })}`

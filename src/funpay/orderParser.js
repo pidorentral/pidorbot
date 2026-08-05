@@ -19,7 +19,42 @@ function getBuyerId(html) {
   const match = html.match(/data-href=(['"])[^'"]*\/users\/(\d+)\/?[^'"]*\1/i);
   return match ? Number(match[2]) : null;
 }
+function parseLotId(html) {
+  const patterns = [
+    /data-lot-id=(['"])(\d+)\1/i,
+    /data-offer-id=(['"])(\d+)\1/i,
+    /href=(['"])https?:\/\/[^\/]+\/offer\/(\d+)\/?\1/i,
+    /href=(['"])https?:\/\/[^\/]+\/lot\/(\d+)\/?\1/i,
+    /href=(['"])https?:\/\/[^\/]+\/product\/(\d+)\/?\1/i,
+  ];
 
+  for (const pattern of patterns) {
+    const match = html.match(pattern);
+    if (match) return Number(match[2]);
+  }
+
+  return null;
+}
+
+function parseLotCount(html, description) {
+  const text = `${html} ${description || ''}`;
+  const patterns = [
+    /(?:data-(?:lot|quantity|qty)=['"]?)(\d+)['"]?/i,
+    /(?:quantity|qty|кол-во|штук?|шт|pcs?|items?)[:\s]*?(\d+)/i,
+    /(?:x|х)\s*(\d+)\b/i,
+    /(\d+)\s*(?:шт|pcs?|items?)\b/i,
+  ];
+
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (match) {
+      const parsed = Number(match[1]);
+      if (Number.isSafeInteger(parsed) && parsed > 0) return parsed;
+    }
+  }
+
+  return 1;
+}
 function parsePrice(text) {
   if (!text) return null;
   const num = text.replace(/[^\d.,]/g, '').replace(',', '.');
@@ -75,6 +110,8 @@ export function parseNewOrders(html) {
       status: getClassText(row, 'tc-status'),
       description,
       desiredMmr: parseDesiredMmr(description),
+      lotId: parseLotId(row),
+      lotCount: parseLotCount(row, description),
       createdLabel: getClassText(row, 'tc-date-time'),
     });
   }

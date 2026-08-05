@@ -31,7 +31,8 @@ export async function findAvailableAccount() {
 export async function getOrderByFunpayId(funpayOrderId) {
   const res = await query(
     `
-    SELECT id, funpay_order_id AS "funpayOrderId", buyer, account_id AS "accountId", status, price, desired_mmr AS "desiredMmr", created_at AS "createdAt"
+    SELECT id, funpay_order_id AS "funpayOrderId", buyer, account_id AS "accountId", status, price,
+           desired_mmr AS "desiredMmr", lot_id AS "lotId", lot_count AS "lotCount", created_at AS "createdAt"
     FROM orders
     WHERE funpay_order_id = $1
     LIMIT 1
@@ -106,7 +107,8 @@ export async function getActiveRentals() {
 export async function getOrders({ status = null, limit = 50, offset = 0 } = {}) {
   const res = await query(
     `
-    SELECT id, funpay_order_id AS "funpayOrderId", buyer, account_id AS "accountId", status, price, desired_mmr AS "desiredMmr", created_at AS "createdAt"
+    SELECT id, funpay_order_id AS "funpayOrderId", buyer, account_id AS "accountId", status, price,
+           desired_mmr AS "desiredMmr", lot_id AS "lotId", lot_count AS "lotCount", created_at AS "createdAt"
     FROM orders
     WHERE ($1::text IS NULL OR status = $1)
     ORDER BY created_at DESC
@@ -158,6 +160,27 @@ export async function getRentalByOrderId(orderId) {
     [orderId]
   );
 
+  return res.rows[0] || null;
+}
+
+export async function getOrderById(id) {
+  const res = await query(
+    `SELECT id, funpay_order_id AS "funpayOrderId", buyer, account_id AS "accountId", status, price, desired_mmr AS "desiredMmr", lot_id AS "lotId", lot_count AS "lotCount", created_at AS "createdAt" FROM orders WHERE id = $1 LIMIT 1`,
+    [id]
+  );
+  return res.rows[0] || null;
+}
+
+export async function getPendingReviews(limit = 50) {
+  const res = await query(
+    `SELECT * FROM reviews WHERE verified_at IS NULL ORDER BY created_at DESC LIMIT $1`,
+    [limit]
+  );
+  return res.rows;
+}
+
+export async function getReviewById(reviewId) {
+  const res = await query(`SELECT * FROM reviews WHERE id = $1`, [reviewId]);
   return res.rows[0] || null;
 }
 

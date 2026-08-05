@@ -18,22 +18,33 @@ if (!process.env.DATABASE_URL) {
   const matchingTitle = `Dota pro ${marker}`;
   const otherTitle = `Other ${marker}`;
 
-  const acc1 = await addAccount({ title: matchingTitle, login: `l1-${marker}`, password: 'p1' });
-  const acc2 = await addAccount({ title: otherTitle, login: `l2-${marker}`, password: 'p2' });
+  let acc1;
+  let acc2;
+  let order;
 
-  const order = await createOrder({ funpayOrderId: `FT-${marker}`, buyer: 'buyer1', price: 1, status: 'paid' });
+  try {
+    acc1 = await addAccount({ title: matchingTitle, login: `l1-${marker}`, password: 'p1' });
+    acc2 = await addAccount({ title: otherTitle, login: `l2-${marker}`, password: 'p2' });
 
-  const endsAt = new Date(Date.now() + 60 * 60 * 1000);
+    order = await createOrder({ funpayOrderId: `FT-${marker}`, buyer: 'buyer1', price: 1, status: 'paid' });
 
-  const reservation = await ensureRental({ buyer: 'buyer1', endsAt, orderId: order.id, nodeId: 1, desiredTitle: 'Dota pro' });
+    const endsAt = new Date(Date.now() + 60 * 60 * 1000);
 
-  assert(reservation && reservation.account, 'reservation not created');
-  assert.equal(reservation.account.id, acc1.id, 'did not pick expected account by title');
+    const reservation = await ensureRental({ buyer: 'buyer1', endsAt, orderId: order.id, nodeId: 1, desiredTitle: matchingTitle });
 
-  // cleanup
-  await query('UPDATE accounts SET status = $1 WHERE id = ANY($2)', ['available', [acc1.id, acc2.id]]);
-  await query('DELETE FROM rentals WHERE order_id = $1', [order.id]);
-  await query('DELETE FROM orders WHERE id = $1', [order.id]);
-  await query('DELETE FROM accounts WHERE id = ANY($1)', [[acc1.id, acc2.id]]);
+    assert(reservation && reservation.account, 'reservation not created');
+    assert.equal(reservation.account.id, acc1.id, 'did not pick expected account by title');
+  } finally {
+    if (acc1 || acc2) {
+      await query('UPDATE accounts SET status = $1 WHERE id = ANY($2)', ['available', [acc1?.id, acc2?.id].filter(Boolean)]);
+    }
+    if (order) {
+      await query('DELETE FROM rentals WHERE order_id = $1', [order.id]);
+      await query('DELETE FROM orders WHERE id = $1', [order.id]);
+    }
+    if (acc1 || acc2) {
+      await query('DELETE FROM accounts WHERE id = ANY($1)', [[acc1?.id, acc2?.id].filter(Boolean)]);
+    }
+  }
   });
 }

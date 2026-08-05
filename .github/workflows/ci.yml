@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_DB: postgres
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres -d postgres"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '20'
+      - run: npm install
+      - name: Wait for Postgres
+        run: |
+          node <<'NODE'
+          const net = require('net');
+          const tryConnect = () => {
+            const socket = net.createConnection({ host: '127.0.0.1', port: 5432 });
+            socket.on('connect', () => {
+              console.log('Postgres is ready');
+              socket.end();
+              process.exit(0);
+            });
+            socket.on('error', () => setTimeout(tryConnect, 1000));
+          };
+          tryConnect();
+          NODE
+      - run: node scripts/createReviewsTable.js
+      - run: node scripts/createReviewAuditsTable.js
+      - run: npm test

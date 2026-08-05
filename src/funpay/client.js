@@ -144,7 +144,11 @@ export class FunpayClient {
 
     this._captureSetCookies(response);
     if (response.url.includes('/login') || response.url.includes('/auth')) throw new FunpayAuthError();
-    if (!response.ok) throw new Error(`FunPay request failed with HTTP ${response.status}`);
+    if (!response.ok) {
+      const bodyText = await response.text().catch(() => '');
+      const bodySnippet = bodyText.slice(0, 400).replace(/\s+/g, ' ').trim();
+      throw new Error(`FunPay request failed with HTTP ${response.status}${bodySnippet ? `: ${bodySnippet}` : ''}`);
+    }
     return response;
   }
 
@@ -161,10 +165,8 @@ export class FunpayClient {
   // --- App data & CSRF ---
 
   async getAppData() {
-    if (!this._appData) {
-      const html = await this.request();
-      this._appData = getAppData(html);
-    }
+    const html = await this.request();
+    this._appData = getAppData(html);
     return this._appData;
   }
 

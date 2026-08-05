@@ -18,3 +18,22 @@ test('keeps default headers when request-specific headers are provided', async (
   assert.match(options.headers.Cookie, /golden_key=test-key/);
   assert.ok(options.headers['User-Agent']);
 });
+
+test('refreshes CSRF token from fresh app data on each request', async () => {
+  let callCount = 0;
+  const client = new FunpayClient({
+    goldenKey: 'test-key',
+    fetchImpl: async () => {
+      callCount += 1;
+      const token = callCount === 1 ? 'token-1' : 'token-2';
+      return new Response(`<html><body><script data-app-data='{"csrf-token":"${token}","userId":1,"username":"buyer"}'></script></body></html>`, { status: 200 });
+    },
+  });
+
+  const firstToken = await client.getCsrfToken();
+  const secondToken = await client.getCsrfToken();
+
+  assert.equal(firstToken, 'token-1');
+  assert.equal(secondToken, 'token-2');
+  assert.equal(callCount, 2);
+});

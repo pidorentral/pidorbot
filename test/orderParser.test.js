@@ -83,6 +83,33 @@ test('parses lot count from order description', () => {
   }]);
 });
 
+test('parses lot count from Russian quantity words', () => {
+  const html = `
+    <div class="tc-item info">
+      <div class="tc-order">#MNO-345</div>
+      <a data-href="/users/100/"></a>
+      <div class="media-user-name">buyer_name</div>
+      <div class="tc-price">1 200 ₽</div>
+      <div class="tc-status">Paid</div>
+      <div class="order-desc">Steam account 2 лота</div>
+      <div class="tc-date-time">today</div>
+    </div>
+  `;
+
+  assert.deepEqual(parseNewOrders(html), [{
+    funpayOrderId: 'MNO-345',
+    buyerId: 100,
+    buyerUsername: 'buyer_name',
+    price: 1200,
+    status: 'Paid',
+    description: 'Steam account 2 лота',
+    desiredMmr: null,
+    lotId: null,
+    lotCount: 2,
+    createdLabel: 'today',
+  }]);
+});
+
 test('parses lot id from order link', () => {
   const html = `
     <div class="tc-item info">

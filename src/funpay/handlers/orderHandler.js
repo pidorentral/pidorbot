@@ -54,6 +54,10 @@ async function processOrder(order, { client, logger, notifyAdmin }) {
   const rentalBaseHours = getRentalDurationHours();
   const rentalHours = rentalBaseHours * quantity;
 
+  logger.info(
+    `Order #${funpayOrderId}: parsed lotCount=${lotCount}, quantity=${quantity}, baseHours=${rentalBaseHours}, rentalHours=${rentalHours}`
+  );
+
   if (ALLOWED_LOT_IDS.length > 0 && !ALLOWED_LOT_IDS.includes(String(lotId))) {
     logger.info(`Order #${funpayOrderId} skipped: lot ${lotId} not in allowed list`);
     return true;
@@ -107,6 +111,10 @@ async function processOrder(order, { client, logger, notifyAdmin }) {
   }
 
   const { account, rental } = reservation;
+
+  logger.info(
+    `Order #${funpayOrderId}: reserved account #${account.id}, rentalEndsAt=${new Date(rental.ends_at).toISOString()}, durationHours=${rentalHours}`
+  );
 
   const fullAccount = await getAccountById(account.id, {
     includeSecrets: true

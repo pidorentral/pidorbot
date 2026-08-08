@@ -43,6 +43,7 @@ function parseLotCount(html, description) {
     /(?:quantity|qty|кол-во|штук?|шт|pcs?|items?)[:\s]*?(\d+)/i,
     /(?:x|х)\s*(\d+)\b/i,
     /(\d+)\s*(?:шт|pcs?|items?)\b/i,
+    /(\d+)\s*(?:лот(?:а|ов)?|lot(?:s)?)(?![\p{L}\p{N}])/iu,
   ];
 
   for (const pattern of patterns) {

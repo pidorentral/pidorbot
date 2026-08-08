@@ -137,6 +137,33 @@ test('parses lot id from order link', () => {
   }]);
 });
 
+test('ignores other numeric values when lot count is absent', () => {
+  const html = `
+    <div class="tc-item info">
+      <div class="tc-order">#PQR-999</div>
+      <a data-href="/users/100/"></a>
+      <div class="media-user-name">buyer_name</div>
+      <div class="tc-price">1 200 ₽</div>
+      <div class="tc-status">Paid</div>
+      <div class="order-desc">Steam account 4 часа 2к ммр</div>
+      <div class="tc-date-time">today</div>
+    </div>
+  `;
+
+  assert.deepEqual(parseNewOrders(html), [{
+    funpayOrderId: 'PQR-999',
+    buyerId: 100,
+    buyerUsername: 'buyer_name',
+    price: 1200,
+    status: 'Paid',
+    description: 'Steam account 4 часа 2к ммр',
+    desiredMmr: 2000,
+    lotId: null,
+    lotCount: 1,
+    createdLabel: 'today',
+  }]);
+});
+
 test('ignores items without an order number', () => {
   assert.deepEqual(parseNewOrders('<div class="tc-item info"><div>missing</div></div>'), []);
 });

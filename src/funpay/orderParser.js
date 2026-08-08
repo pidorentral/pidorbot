@@ -40,10 +40,10 @@ function parseLotCount(html, description) {
   const text = `${html} ${description || ''}`;
   const patterns = [
     /(?:data-(?:lot|quantity|qty)=['"]?)(\d+)['"]?/i,
-    /(?:quantity|qty|кол-во|штук?|шт|pcs?|items?)[:\s]*?(\d+)/i,
-    /(?:x|х)\s*(\d+)\b/i,
-    /(\d+)\s*(?:шт|pcs?|items?)\b/i,
-    /(\d+)\s*(?:лот(?:а|ов)?|lot(?:s)?)(?![\p{L}\p{N}])/iu,
+    /(?:quantity|qty|кол-во)\s*[:=]?\s*(\d+)/i,
+    /(?:\b|\s)(?:x|х)\s*(\d+)\b/i,
+    /(?:^|\s)(\d+)\s*(?:лот(?:а|ов)?|lot(?:s)?)(?![\p{L}\p{N}])/iu,
+    /(?:^|\s)(\d+)\s*(?:шт|pcs?|items?)(?![\p{L}\p{N}])/iu,
   ];
 
   for (const pattern of patterns) {

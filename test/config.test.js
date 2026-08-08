@@ -15,3 +15,8 @@ test('rejects unsafe runtime intervals and durations', () => {
   assert.throws(() => getRentalDurationHours('0'), /RENTAL_DURATION_HOURS/);
   assert.equal(getRentalDurationHours('1.5'), 1.5);
 });
+
+test('multiplies rental duration by lot count', () => {
+  assert.equal(getRentalDurationHours('1') * 2, 2);
+  assert.equal(getRentalDurationHours('2') * 3, 6);
+});

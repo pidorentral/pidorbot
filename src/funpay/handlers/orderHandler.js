@@ -18,8 +18,6 @@ export function getRentalDurationHours(value = process.env.RENTAL_DURATION_HOURS
   return duration;
 }
 
-const RENTAL_DURATION_HOURS = getRentalDurationHours();
-
 const ALLOWED_LOT_IDS = (process.env.FUNPAY_ALLOWED_LOT_IDS || '')
   .split(',')
   .map((s) => s.trim())
@@ -53,7 +51,8 @@ async function processOrder(order, { client, logger, notifyAdmin }) {
   }
 
   const quantity = Math.max(1, Number.isFinite(Number(lotCount)) ? Number(lotCount) : 1);
-  const rentalHours = RENTAL_DURATION_HOURS * quantity;
+  const rentalBaseHours = getRentalDurationHours();
+  const rentalHours = rentalBaseHours * quantity;
 
   if (ALLOWED_LOT_IDS.length > 0 && !ALLOWED_LOT_IDS.includes(String(lotId))) {
     logger.info(`Order #${funpayOrderId} skipped: lot ${lotId} not in allowed list`);
@@ -123,7 +122,7 @@ async function processOrder(order, { client, logger, notifyAdmin }) {
     `Steam Guard: ${code}`,
     ``,
     `Для получения нового кода напишите !code`,
-    quantity > 1 ? `Аренда на ${rentalHours} часов (${RENTAL_DURATION_HOURS} × ${quantity})` : `Аренда на ${RENTAL_DURATION_HOURS} часов`,
+    quantity > 1 ? `Аренда на ${rentalHours} часов (${rentalBaseHours} × ${quantity})` : `Аренда на ${rentalBaseHours} часов`,
     `Аренда до: ${new Date(rental.ends_at).toLocaleString('ru-RU', {
       timeZone: 'Europe/Kiev'
     })}`

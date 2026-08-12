@@ -76,7 +76,12 @@ async function openSteamLoginPage(page, { logger = console } = {}) {
 
   for (const url of candidates) {
     try {
-      await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 20_000 });
+      await page.goto(url, { waitUntil: 'networkidle', timeout: 20_000 });
+      try {
+        await page.waitForSelector(selectors.join(', '), { timeout: 15_000 });
+      } catch (waitErr) {
+        logger.warn(`Steam login form did not appear for ${url}: ${waitErr.message}`);
+      }
       for (const selector of selectors) {
         const locator = page.locator(selector).first();
         if (await locator.count().then((count) => count > 0)) {

@@ -1,6 +1,32 @@
 import { getClient, query } from '../db.js';
 import * as crypto from '../crypto.js';
 
+function normalizeSteamId(value) {
+  if (value === null || value === undefined || value === '') {
+    return null;
+  }
+
+  const raw = String(value).trim();
+  if (!/^\d+$/.test(raw)) {
+    return null;
+  }
+
+  const numeric = BigInt(raw);
+  const candidate = numeric - 8n;
+  const minimumSteamId = 76561197960265728n;
+
+  if (
+    numeric >= minimumSteamId &&
+    numeric % 10n === 0n &&
+    candidate >= minimumSteamId &&
+    candidate % 10n === 2n
+  ) {
+    return candidate.toString();
+  }
+
+  return numeric.toString();
+}
+
 export async function addAccount({ title, login, password, notes = null, mmr = null, steamId = null }) {
   const encryptedPassword = crypto.encrypt(password);
 
@@ -21,7 +47,7 @@ export async function attachMafileToAccount(accountId, { sharedSecret, identityS
     ? null
     : JSON.stringify(crypto.encrypt(JSON.stringify(rawJson)));
 
-  const steamId = rawJson?.steamid ?? rawJson?.steam_id ?? rawJson?.Session?.SteamID ?? rawJson?.session?.SteamID ?? null;
+  const steamId = normalizeSteamId(rawJson?.steamid ?? rawJson?.steam_id ?? rawJson?.Session?.SteamID ?? rawJson?.session?.SteamID ?? null);
   const client = await getClient();
   try {
     await client.query('BEGIN');

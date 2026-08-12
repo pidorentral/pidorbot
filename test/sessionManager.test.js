@@ -18,16 +18,16 @@ test('steam logout URL prefers a Steam profile when steamId is known', () => {
   assert.match(url, /76561198000000000/i);
 });
 
-test('mafile parser reads SteamID from nested Session.SteamID', () => {
+test('mafile parser reads SteamID from nested Session.SteamID and normalizes instance offsets', () => {
   const payload = JSON.stringify({
     shared_secret: 'secret',
     Session: {
-      SteamID: 76561198000000000,
+      SteamID: 76561198405948820,
     },
   });
 
   const result = parseMafile(payload);
-  assert.equal(result.steamId, '76561198000000000');
+  assert.equal(result.steamId, '76561198405948812');
 });
 
 test('disabled logout returns a manual reset URL and explicit reason', async () => {

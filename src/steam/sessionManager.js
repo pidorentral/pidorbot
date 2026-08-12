@@ -15,7 +15,7 @@ export function buildSteamLogoutUrl(steamId = null, username = null) {
   }
 
   if (username) {
-    return `https://steamcommunity.com/login/home/?goto=${encodeURIComponent(`/id/${username}`)}`;
+    return `https://steamcommunity.com/id/${encodeURIComponent(username)}`;
   }
 
   return 'https://steamcommunity.com/';
@@ -26,21 +26,21 @@ export async function logoutSteamSession(account, { logger = console, notifyAdmi
     return { ok: false, reason: 'missing-account' };
   }
 
+  const steamId = account.steamId || account.steam_id || null;
+  const manualUrl = buildSteamLogoutUrl(steamId, account.login || account.username || null);
+
   if (!isSteamSessionLogoutEnabled()) {
-    logger.info(`Steam session logout disabled for account ${account.login || account.id}`);
-    return { ok: false, reason: 'disabled' };
+    logger.info(`Steam session logout disabled for account ${account.login || account.id}. Manual reset URL: ${manualUrl}`);
+    return { ok: false, reason: 'disabled', manualUrl };
   }
 
-  const steamId = account.steamId || account.steam_id || null;
   const login = account.login || account.username || null;
   const password = account.password || null;
   const sharedSecret = account.sharedSecret || account.shared_secret || null;
 
   if (!login || !password) {
-    return { ok: false, reason: 'missing-credentials' };
+    return { ok: false, reason: 'missing-credentials', manualUrl };
   }
-
-  const manualUrl = buildSteamLogoutUrl(steamId, login);
 
   try {
     const browserModule = await import('playwright').catch(() => null);

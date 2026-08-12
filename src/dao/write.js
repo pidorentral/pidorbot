@@ -21,6 +21,7 @@ export async function attachMafileToAccount(accountId, { sharedSecret, identityS
     ? null
     : JSON.stringify(crypto.encrypt(JSON.stringify(rawJson)));
 
+  const steamId = rawJson?.steamid ?? null;
   const client = await getClient();
   try {
     await client.query('BEGIN');
@@ -40,13 +41,13 @@ export async function attachMafileToAccount(accountId, { sharedSecret, identityS
     const mafileId = insertMafile.rows[0].id;
     await client.query(
       `UPDATE accounts
-       SET mafile_id = $1
-       WHERE id = $2`,
-      [mafileId, accountId]
+       SET mafile_id = $1, steam_id = COALESCE(steam_id, $2)
+       WHERE id = $3`,
+      [mafileId, steamId, accountId]
     );
 
     await client.query('COMMIT');
-    return { accountId, mafileId };
+    return { accountId, mafileId, steamId };
   } catch (err) {
     await client.query('ROLLBACK');
     throw err;

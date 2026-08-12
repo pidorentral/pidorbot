@@ -1,7 +1,0 @@
-providers = ["node"]
-
-[variables]
-PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD = "1"
-
-[phases.build]
-cmds = ["npx playwright install --with-deps chromium"]

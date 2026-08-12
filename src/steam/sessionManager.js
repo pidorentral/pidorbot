@@ -56,6 +56,43 @@ export function buildSteamPasswordChangeUrl(steamId = null, username = null) {
   return 'https://store.steampowered.com/account/manage';
 }
 
+async function openSteamLoginPage(page, { logger = console } = {}) {
+  const candidates = [
+    'https://store.steampowered.com/login/',
+    'https://steamcommunity.com/login',
+    'https://steamcommunity.com/login/home/?goto=',
+  ];
+
+  const selectors = [
+    'input[name="username"]',
+    'input[name="steamAccountName"]',
+    'input[type="email"]',
+    'input[id="input_username"]',
+    'input[name="account_name"]',
+    'input[name="password"]',
+  ];
+
+  let lastError = null;
+
+  for (const url of candidates) {
+    try {
+      await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 20_000 });
+      for (const selector of selectors) {
+        const locator = page.locator(selector).first();
+        if (await locator.count().then((count) => count > 0)) {
+          return { ok: true, url: page.url(), selector };
+        }
+      }
+      lastError = new Error(`Steam login page did not expose known login fields at ${url}`);
+    } catch (err) {
+      lastError = err;
+      logger.warn(`Steam login navigation failed for ${url}: ${err.message}`);
+    }
+  }
+
+  return { ok: false, reason: 'login-form-not-found', url: page.url(), error: lastError?.message || 'unknown' };
+}
+
 export async function changeSteamPassword(account, { newPassword = null, logger = console, notifyAdmin = null } = {}) {
   if (!account) {
     return { ok: false, reason: 'missing-account' };
@@ -91,10 +128,22 @@ export async function changeSteamPassword(account, { newPassword = null, logger 
     const browser = await chromium.launch({ headless: true });
     try {
       const page = await browser.newPage();
-      await page.goto('https://store.steampowered.com/login/', { waitUntil: 'domcontentloaded', timeout: 30_000 });
+      const openResult = await openSteamLoginPage(page, { logger });
+      if (!openResult.ok) {
+        return { ok: false, reason: 'login-form-not-found', url: openResult.url, error: openResult.error, manualUrl };
+      }
 
-      await page.locator('input[name="username"]').fill(login);
-      await page.locator('input[name="password"]').fill(oldPassword);
+      const usernameField = page.locator('input[name="username"], input[name="steamAccountName"], input[type="email"], input[id="input_username"], input[name="account_name"]').first();
+      await usernameField.waitFor({ state: 'visible', timeout: 15_000 }).catch(() => {
+        throw new Error('Steam login form did not become visible');
+      });
+      await usernameField.fill(login);
+
+      const passwordField = page.locator('input[name="password"]').first();
+      await passwordField.waitFor({ state: 'visible', timeout: 15_000 }).catch(() => {
+        throw new Error('Steam password field did not become visible');
+      });
+      await passwordField.fill(oldPassword);
 
       if (sharedSecret) {
         const code = SteamTotp.generateAuthCode(sharedSecret);
@@ -194,10 +243,22 @@ export async function logoutSteamSession(account, { logger = console, notifyAdmi
     const browser = await chromium.launch({ headless: true });
     try {
       const page = await browser.newPage();
-      await page.goto('https://store.steampowered.com/login/', { waitUntil: 'domcontentloaded', timeout: 30_000 });
+      const openResult = await openSteamLoginPage(page, { logger });
+      if (!openResult.ok) {
+        return { ok: false, reason: 'login-form-not-found', url: openResult.url, error: openResult.error, manualUrl };
+      }
 
-      await page.locator('input[name="username"]').fill(login);
-      await page.locator('input[name="password"]').fill(password);
+      const usernameField = page.locator('input[name="username"], input[name="steamAccountName"], input[type="email"], input[id="input_username"], input[name="account_name"]').first();
+      await usernameField.waitFor({ state: 'visible', timeout: 15_000 }).catch(() => {
+        throw new Error('Steam login form did not become visible');
+      });
+      await usernameField.fill(login);
+
+      const passwordField = page.locator('input[name="password"]').first();
+      await passwordField.waitFor({ state: 'visible', timeout: 15_000 }).catch(() => {
+        throw new Error('Steam password field did not become visible');
+      });
+      await passwordField.fill(password);
 
       if (sharedSecret) {
         const code = SteamTotp.generateAuthCode(sharedSecret);
@@ -207,10 +268,7 @@ export async function logoutSteamSession(account, { logger = console, notifyAdmi
         }
       }
 
-      await Promise.all([
-        page.locator('button[type="submit"], input[type="submit"]').first().click(),
-      ]);
-
+      await page.locator('button[type="submit"], input[type="submit"]').first().click();
       await page.waitForTimeout(2_000);
       await page.goto('https://steamcommunity.com/', { waitUntil: 'domcontentloaded', timeout: 30_000 });
 

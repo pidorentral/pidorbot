@@ -1,7 +1,7 @@
 import { query, getClient } from '../db.js';
 import * as crypto from '../crypto.js';
 import { getAccountById } from '../dao/read.js';
-import { logoutSteamSession } from '../steam/sessionManager.js';
+import { changeSteamPassword, logoutSteamSession } from '../steam/sessionManager.js';
 import { generatePassword } from './utils.js';
 
 const DEFAULT_CHECK_INTERVAL_MS = 30_000;
@@ -101,10 +101,26 @@ async function expireRental(rental, { client, notifyAdmin, logger }) {
     logger.info(`Rental #${rental.id} expired. Account #${rental.accountId} password changed, status → available`);
 
     if (accountBeforeReset) {
-      const steamLogoutResult = await logoutSteamSession(
+      const steamPasswordResult = await changeSteamPassword(
         {
           ...accountBeforeReset,
           password: accountBeforeReset.password,
+        },
+        { newPassword, logger, notifyAdmin }
+      );
+
+      if (!steamPasswordResult.ok) {
+        logger.warn(
+          `Steam password change not completed for account #${rental.accountId} (reason: ${steamPasswordResult.reason})`
+        );
+      } else {
+        logger.info(`Steam password change completed for account #${rental.accountId}`);
+      }
+
+      const steamLogoutResult = await logoutSteamSession(
+        {
+          ...accountBeforeReset,
+          password: newPassword,
         },
         { logger, notifyAdmin }
       );

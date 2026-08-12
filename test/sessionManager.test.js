@@ -3,7 +3,7 @@ import test from 'node:test';
 
 process.env.STEAM_SESSION_LOGOUT_ENABLED = 'false';
 
-const { isSteamSessionLogoutEnabled, buildSteamLogoutUrl, logoutSteamSession } = await import('../src/steam/sessionManager.js');
+const { isSteamSessionLogoutEnabled, buildSteamLogoutUrl, logoutSteamSession, changeSteamPassword } = await import('../src/steam/sessionManager.js');
 const { parseMafile } = await import('../steam/mafile.js');
 
 test('steam logout is disabled by default when env is false', () => {
@@ -32,6 +32,18 @@ test('mafile parser reads SteamID from nested Session.SteamID and normalizes ins
 
 test('disabled logout returns a manual reset URL and explicit reason', async () => {
   const result = await logoutSteamSession({ login: 'demo-user', steamId: '76561198000000000' }, { logger: { info() {}, warn() {}, error() {} } });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, 'disabled');
+  assert.ok(result.manualUrl);
+  assert.match(result.manualUrl, /steamcommunity\.com/i);
+});
+
+test('steam password change is disabled by default and returns manual guidance', async () => {
+  const result = await changeSteamPassword(
+    { login: 'demo-user', password: 'old-pass', steamId: '76561198000000000' },
+    { newPassword: 'NewPass!123', logger: { info() {}, warn() {}, error() {} } }
+  );
 
   assert.equal(result.ok, false);
   assert.equal(result.reason, 'disabled');

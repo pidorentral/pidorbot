@@ -1,5 +1,19 @@
 import SteamTotp from 'steam-totp';
 
+export function getSteamBrowserFailureReason(error) {
+  const message = error && typeof error === 'object' && 'message' in error ? String(error.message) : String(error || '');
+
+  if (!message) {
+    return 'browser-launch-error';
+  }
+
+  if (/Executable doesn't exist|browserType\.launch|Please run the following command to download new browsers|ms-playwright/i.test(message)) {
+    return 'browser-not-installed';
+  }
+
+  return 'browser-launch-error';
+}
+
 export function isSteamSessionLogoutEnabled(value = process.env.STEAM_SESSION_LOGOUT_ENABLED) {
   if (value === undefined || value === null || value === '') {
     return false;
@@ -136,11 +150,12 @@ export async function changeSteamPassword(account, { newPassword = null, logger 
       await browser.close();
     }
   } catch (err) {
+    const reason = getSteamBrowserFailureReason(err);
     logger.error(`Steam password change failed for ${login}: ${err.message}`);
     if (notifyAdmin) {
       await notifyAdmin(`⚠️ Ошибка смены пароля Steam для аккаунта ${login}. Требуется ручная проверка. Ссылка: ${manualUrl}`);
     }
-    return { ok: false, reason: 'change-password-error', error: err.message, manualUrl };
+    return { ok: false, reason, error: err.message, manualUrl };
   }
 }
 
@@ -212,10 +227,11 @@ export async function logoutSteamSession(account, { logger = console, notifyAdmi
       await browser.close();
     }
   } catch (err) {
+    const reason = getSteamBrowserFailureReason(err);
     logger.error(`Steam logout failed for ${login}: ${err.message}`);
     if (notifyAdmin) {
       await notifyAdmin(`⚠️ Ошибка выхода из Steam для аккаунта ${login}. Требуется ручная проверка. Ссылка: ${manualUrl}`);
     }
-    return { ok: false, reason: 'logout-error', error: err.message, url: manualUrl };
+    return { ok: false, reason, error: err.message, url: manualUrl };
   }
 }

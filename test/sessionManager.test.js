@@ -3,7 +3,7 @@ import test from 'node:test';
 
 process.env.STEAM_SESSION_LOGOUT_ENABLED = 'false';
 
-const { isSteamSessionLogoutEnabled, buildSteamLogoutUrl, logoutSteamSession, changeSteamPassword } = await import('../src/steam/sessionManager.js');
+const { isSteamSessionLogoutEnabled, buildSteamLogoutUrl, logoutSteamSession, changeSteamPassword, getSteamBrowserFailureReason } = await import('../src/steam/sessionManager.js');
 const { parseMafile } = await import('../steam/mafile.js');
 
 test('steam logout is disabled by default when env is false', () => {
@@ -49,4 +49,9 @@ test('steam password change is disabled by default and returns manual guidance',
   assert.equal(result.reason, 'disabled');
   assert.ok(result.manualUrl);
   assert.match(result.manualUrl, /steamcommunity\.com/i);
+});
+
+test('playwright browser missing detection identifies the install error correctly', () => {
+  const error = new Error('browserType.launch: Executable doesn\'t exist at /root/.cache/ms-playwright/chromium_headless_shell-1234/chrome-headless-shell-linux64/chrome-headless-shell');
+  assert.equal(getSteamBrowserFailureReason(error), 'browser-not-installed');
 });

@@ -4,6 +4,7 @@
     "start": "node bootstrap.js",
     "dev": "node bootstrap.js",
     "test": "node --test",
+    "postinstall": "playwright install chromium",
     "db:smoke": "node --env-file=.env scripts/dbSmoke.js",
     "funpay:check": "node --env-file=.env scripts/funpayCheck.js",
     "db:create-indexes": "node --env-file=.env scripts/createIndexes.js",

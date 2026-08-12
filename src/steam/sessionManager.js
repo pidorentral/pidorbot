@@ -1,5 +1,25 @@
 import SteamTotp from 'steam-totp';
 
+const REALISTIC_USER_AGENT =
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
+
+const STEALTH_LAUNCH_OPTIONS = {
+  headless: 'new',
+  args: ['--disable-blink-features=AutomationControlled'],
+  ignoreHTTPSErrors: true,
+};
+
+const STEALTH_PAGE_OPTIONS = {
+  userAgent: REALISTIC_USER_AGENT,
+  viewport: { width: 1920, height: 1080 },
+  extraHTTPHeaders: {
+    'Accept-Language': 'en-US,en;q=0.9',
+    'Sec-Ch-Ua': '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
+    'Sec-Ch-Ua-Mobile': '?0',
+    'Sec-Ch-Ua-Platform': '"Windows"',
+  },
+};
+
 export function getSteamBrowserFailureReason(error) {
   const message = error && typeof error === 'object' && 'message' in error ? String(error.message) : String(error || '');
 
@@ -76,7 +96,11 @@ async function openSteamLoginPage(page, { logger = console } = {}) {
 
   for (const url of candidates) {
     try {
-      await page.goto(url, { waitUntil: 'networkidle', timeout: 20_000 });
+      await page.goto(url, {
+        waitUntil: 'networkidle',
+        timeout: 20_000,
+        referer: 'https://www.google.com/',
+      });
       try {
         await page.waitForSelector(selectors.join(', '), { timeout: 15_000 });
       } catch (waitErr) {
@@ -130,9 +154,9 @@ export async function changeSteamPassword(account, { newPassword = null, logger 
     }
 
     const { chromium } = browserModule;
-    const browser = await chromium.launch({ headless: true });
+    const browser = await chromium.launch(STEALTH_LAUNCH_OPTIONS);
     try {
-      const page = await browser.newPage();
+      const page = await browser.newPage(STEALTH_PAGE_OPTIONS);
       const openResult = await openSteamLoginPage(page, { logger });
       if (!openResult.ok) {
         return { ok: false, reason: 'login-form-not-found', url: openResult.url, error: openResult.error, manualUrl };
@@ -161,7 +185,11 @@ export async function changeSteamPassword(account, { newPassword = null, logger 
       await page.locator('button[type="submit"], input[type="submit"]').first().click();
       await page.waitForTimeout(3_000);
 
-      await page.goto('https://store.steampowered.com/account/manage', { waitUntil: 'domcontentloaded', timeout: 30_000 });
+      await page.goto('https://store.steampowered.com/account/manage', {
+        waitUntil: 'domcontentloaded',
+        timeout: 30_000,
+        referer: 'https://steamcommunity.com/',
+      });
 
       const changePasswordLink = page.locator('a[href*="change_password"], a[href*="account/manage"], text=/change password|изменить пароль/i').first();
       if (await changePasswordLink.count().then((count) => count > 0)) {
@@ -245,9 +273,9 @@ export async function logoutSteamSession(account, { logger = console, notifyAdmi
     }
 
     const { chromium } = browserModule;
-    const browser = await chromium.launch({ headless: true });
+    const browser = await chromium.launch(STEALTH_LAUNCH_OPTIONS);
     try {
-      const page = await browser.newPage();
+      const page = await browser.newPage(STEALTH_PAGE_OPTIONS);
       const openResult = await openSteamLoginPage(page, { logger });
       if (!openResult.ok) {
         return { ok: false, reason: 'login-form-not-found', url: openResult.url, error: openResult.error, manualUrl };
@@ -275,7 +303,11 @@ export async function logoutSteamSession(account, { logger = console, notifyAdmi
 
       await page.locator('button[type="submit"], input[type="submit"]').first().click();
       await page.waitForTimeout(2_000);
-      await page.goto('https://steamcommunity.com/', { waitUntil: 'domcontentloaded', timeout: 30_000 });
+      await page.goto('https://steamcommunity.com/', {
+        waitUntil: 'domcontentloaded',
+        timeout: 30_000,
+        referer: 'https://store.steampowered.com/',
+      });
 
       const logoutLink = page.locator('a[href*="logout"], a[href*="login/logout"], a[href*="login?"], text=/log out|logout/i').first();
       if (await logoutLink.count().then((count) => count > 0)) {

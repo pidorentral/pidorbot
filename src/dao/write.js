@@ -21,7 +21,7 @@ export async function attachMafileToAccount(accountId, { sharedSecret, identityS
     ? null
     : JSON.stringify(crypto.encrypt(JSON.stringify(rawJson)));
 
-  const steamId = rawJson?.steamid ?? null;
+  const steamId = rawJson?.steamid ?? rawJson?.steam_id ?? rawJson?.Session?.SteamID ?? rawJson?.session?.SteamID ?? null;
   const client = await getClient();
   try {
     await client.query('BEGIN');

@@ -4,6 +4,7 @@ import test from 'node:test';
 process.env.STEAM_SESSION_LOGOUT_ENABLED = 'false';
 
 const { isSteamSessionLogoutEnabled, buildSteamLogoutUrl, logoutSteamSession } = await import('../src/steam/sessionManager.js');
+const { parseMafile } = await import('../steam/mafile.js');
 
 test('steam logout is disabled by default when env is false', () => {
   assert.equal(isSteamSessionLogoutEnabled('false'), false);
@@ -15,6 +16,18 @@ test('steam logout URL prefers a Steam profile when steamId is known', () => {
   const url = buildSteamLogoutUrl('76561198000000000');
   assert.match(url, /steamcommunity\.com/i);
   assert.match(url, /76561198000000000/i);
+});
+
+test('mafile parser reads SteamID from nested Session.SteamID', () => {
+  const payload = JSON.stringify({
+    shared_secret: 'secret',
+    Session: {
+      SteamID: 76561198000000000,
+    },
+  });
+
+  const result = parseMafile(payload);
+  assert.equal(result.steamId, '76561198000000000');
 });
 
 test('disabled logout returns a manual reset URL and explicit reason', async () => {

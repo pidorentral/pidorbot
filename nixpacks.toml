@@ -3,7 +3,7 @@ providers = ["node"]
 [variables]
 PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD = "1"
 
-[phases.install]
+[phases.setup]
 aptPkgs = [
   "glib-2.0",
   "libx11-6",

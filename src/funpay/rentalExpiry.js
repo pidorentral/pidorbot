@@ -1,5 +1,7 @@
 import { query, getClient } from '../db.js';
 import * as crypto from '../crypto.js';
+import { getAccountById } from '../dao/read.js';
+import { logoutSteamSession } from '../steam/sessionManager.js';
 import { generatePassword } from './utils.js';
 
 const DEFAULT_CHECK_INTERVAL_MS = 30_000;
@@ -67,6 +69,8 @@ async function expireRental(rental, { client, notifyAdmin, logger }) {
   try {
     await dbClient.query('BEGIN');
 
+    const accountBeforeReset = await getAccountById(rental.accountId, { includeSecrets: true });
+
     // 1. Завершить аренду
     const expiredRental = await dbClient.query(
       `UPDATE rentals
@@ -95,6 +99,24 @@ async function expireRental(rental, { client, notifyAdmin, logger }) {
     await dbClient.query('COMMIT');
 
     logger.info(`Rental #${rental.id} expired. Account #${rental.accountId} password changed, status → available`);
+
+    if (accountBeforeReset) {
+      const steamLogoutResult = await logoutSteamSession(
+        {
+          ...accountBeforeReset,
+          password: accountBeforeReset.password,
+        },
+        { logger, notifyAdmin }
+      );
+
+      if (!steamLogoutResult.ok) {
+        logger.warn(
+          `Steam session logout not completed for account #${rental.accountId} (reason: ${steamLogoutResult.reason})`
+        );
+      } else {
+        logger.info(`Steam session logout completed for account #${rental.accountId}`);
+      }
+    }
 
     // 3. Уведомить покупателя в чате FunPay
     if (rental.nodeId && client) {

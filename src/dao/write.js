@@ -372,6 +372,67 @@ export async function completeRental(rentalId) {
   }
 }
 
+export async function extendActiveRental(rentalId, hours = 1, meta = {}) {
+  const normalizedHours = Number(hours);
+  if (!Number.isFinite(normalizedHours) || normalizedHours <= 0) {
+    throw new Error('hours must be a positive number');
+  }
+
+  const client = await getClient();
+  try {
+    await client.query('BEGIN');
+
+    const rentalRes = await client.query(
+      `SELECT id, account_id, ends_at, status
+       FROM rentals
+       WHERE id = $1
+       FOR UPDATE`,
+      [rentalId]
+    );
+
+    if (!rentalRes.rows.length) {
+      throw new Error('Rental not found');
+    }
+
+    const rental = rentalRes.rows[0];
+    if (rental.status !== 'active') {
+      throw new Error('Rental is not active');
+    }
+
+    const previousEndsAt = new Date(rental.ends_at);
+    const newEndsAt = new Date(previousEndsAt.getTime() + normalizedHours * 60 * 60 * 1000);
+
+    const updatedRes = await client.query(
+      `UPDATE rentals
+       SET ends_at = $1
+       WHERE id = $2
+       RETURNING id, account_id, ends_at, status`,
+      [newEndsAt, rentalId]
+    );
+
+    await client.query(
+      `INSERT INTO review_audits (review_id, action, performed_by, details)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT DO NOTHING`,
+      [null, 'extend_rental', meta.reason || 'manual', JSON.stringify({ rentalId, hours: normalizedHours, previousEndsAt: previousEndsAt.toISOString(), newEndsAt: newEndsAt.toISOString() })]
+    );
+
+    await client.query('COMMIT');
+    return {
+      rentalId: updatedRes.rows[0].id,
+      accountId: updatedRes.rows[0].account_id,
+      hours: normalizedHours,
+      previousEndsAt,
+      newEndsAt,
+    };
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
 export async function cancelRental(rentalId) {
   const client = await getClient();
   try {
@@ -454,13 +515,18 @@ export async function verifyReviewAndGrantBonus(reviewId, verifier = 'admin') {
     }
 
     // Grant bonus: extend active rental for this order by 1 hour
-    const bonusRes = await client.query(
-      `UPDATE rentals
-       SET ends_at = ends_at + INTERVAL '1 hour'
+    const rentalRow = await client.query(
+      `SELECT id
+       FROM rentals
        WHERE order_id = $1 AND status = 'active'
-       RETURNING id, ends_at`,
+       ORDER BY ends_at DESC
+       LIMIT 1`,
       [review.order_id]
     );
+
+    const bonusRes = rentalRow.rows[0]
+      ? await extendActiveRental(rentalRow.rows[0].id, 1, { reason: `review:${verifier}` })
+      : { rentalId: null, hours: 1 };
 
     // Mark review as verified
     await client.query(
@@ -472,11 +538,11 @@ export async function verifyReviewAndGrantBonus(reviewId, verifier = 'admin') {
     await client.query(
       `INSERT INTO review_audits (review_id, action, performed_by, details)
        VALUES ($1, $2, $3, $4)`,
-      [reviewId, 'verify', verifier, JSON.stringify({ grantedRentalId: bonusRes.rows[0]?.id || null })]
+      [reviewId, 'verify', verifier, JSON.stringify({ grantedRentalId: bonusRes.rentalId || null })]
     );
 
     await client.query('COMMIT');
-    return { reviewId, rental: bonusRes.rows[0] || null };
+    return { reviewId, rental: bonusRes.rentalId ? { id: bonusRes.rentalId, ends_at: bonusRes.newEndsAt } : null };
   } catch (err) {
     await client.query('ROLLBACK');
     throw err;

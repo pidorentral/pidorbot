@@ -69,6 +69,10 @@ export async function cancelRental(rentalId) {
   return writeDao.cancelRental(rentalId);
 }
 
+export async function extendActiveRental(rentalId, hours = 1, meta = {}) {
+  return writeDao.extendActiveRental(rentalId, hours, meta);
+}
+
 // Account management helpers
 export async function setAccountStatus(accountId, status) {
   return writeDao.setAccountStatus(accountId, status);
@@ -95,6 +99,7 @@ export default {
   getOrderById,
   completeRental,
   cancelRental,
+  extendActiveRental,
   setAccountStatus,
   deleteAccount,
   updateAccount,

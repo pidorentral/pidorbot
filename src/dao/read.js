@@ -152,6 +152,21 @@ export async function getActiveRentalByNodeId(nodeId) {
   return res.rows[0] || null;
 }
 
+export async function getActiveRentalByBuyer(buyer) {
+  const res = await query(
+    `SELECT r.id, r.account_id AS "accountId", r.buyer, r.node_id AS "nodeId",
+            r.order_id AS "orderId", r.ends_at AS "endsAt", r.state,
+            a.title, a.login
+     FROM rentals r
+     JOIN accounts a ON a.id = r.account_id
+     WHERE r.buyer = $1 AND r.status = 'active'
+     ORDER BY r.ends_at DESC
+     LIMIT 1`,
+    [buyer]
+  );
+  return res.rows[0] || null;
+}
+
 export async function getRentalByOrderId(orderId) {
   const res = await query(
     `SELECT *

@@ -1,12 +1,14 @@
 import {
     getAccountById,
-    getOrderByFunpayId
+    getOrderByFunpayId,
+    getActiveRentalByBuyer,
 } from '../../dao/read.js';
 
 import {
     createOrder,
     ensureRental,
-    updateOrder
+    updateOrder,
+    extendActiveRental,
 } from "../../dao/write.js";
 import { generateSteamGuardCode } from '../../../steam/steamGuard.js';
 
@@ -86,6 +88,34 @@ async function processOrder(order, { client, logger, notifyAdmin }) {
       if (notifyAdmin) await notifyAdmin(`⚠️ Не нашёл чат с ${buyer}, заказ #${funpayOrderId} остался в paid`);
       return; // статус остаётся 'paid' — заказ переобработается на следующем цикле
   }
+
+  const existingActiveRental = await getActiveRentalByBuyer(buyer);
+  if (existingActiveRental) {
+    const extension = await extendActiveRental(existingActiveRental.id, rentalHours, {
+      reason: `order:${funpayOrderId}`,
+    });
+
+    const account = await getAccountById(existingActiveRental.accountId, { includeSecrets: true });
+    const message = [
+      `✅ Дополнительный лот принят.`,
+      ``,
+      `Время аренды продлено на ${rentalHours} часов.`,
+      `Новая дата окончания: ${new Date(extension.newEndsAt).toLocaleString('ru-RU', { timeZone: 'Europe/Kiev' })}`,
+      ``,
+      account ? `Логин: ${account.login}\nПароль: ${account.password}` : null,
+      `Для получения нового кода напишите !code`,
+    ].filter(Boolean).join('\n');
+
+    await client.sendMessage(nodeId, message);
+    await updateOrder(dbOrder.id, { status: 'fulfilled' });
+
+    logger.info(
+      `Order #${funpayOrderId}: extended active rental #${existingActiveRental.id} by ${rentalHours}h for buyer ${buyer}; ends_at=${new Date(extension.newEndsAt).toISOString()}`
+    );
+    if (notifyAdmin) await notifyAdmin(`✅ Заказ #${funpayOrderId}: активная аренда #${existingActiveRental.id} продлена на ${rentalHours}h для ${buyer}`);
+    return true;
+  }
+
   const endsAt = new Date(Date.now() + rentalHours * 60 * 60 * 1000);
 
     const reservation = await ensureRental({

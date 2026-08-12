@@ -16,6 +16,7 @@ import {
   getPendingReviews,
   getReviewById,
   verifyReview,
+  extendActiveRental,
 } from './services/rentalStore.js';
 import { parseMafile } from '../steam/mafile.js';
 import { generateSteamGuardCode } from '../steam/steamGuard.js';
@@ -31,7 +32,17 @@ const COMMANDS = [
   { command: 'claim_review', description: 'Claim review bonus' },
 ];
 
-// Handlers must be defined before createBot registers them.
+function buildRentalExtensionKeyboard(rentalId) {
+  return Markup.inlineKeyboard([
+    [
+      Markup.button.callback('+1h', `rental_extend:${rentalId}:1`),
+      Markup.button.callback('+2h', `rental_extend:${rentalId}:2`),
+      Markup.button.callback('+4h', `rental_extend:${rentalId}:4`),
+    ],
+    [Markup.button.callback('Custom hours', `rental_extend_custom:${rentalId}`)],
+  ]);
+}
+
 async function showActiveRentals(ctx) {
   const rentals = await getActiveRentals();
 
@@ -40,21 +51,16 @@ async function showActiveRentals(ctx) {
     return;
   }
 
-  await answer(ctx, [
-    'Active rentals',
-    '',
-    ...rentals.map((r) => `#${r.id} account #${r.accountId}\nBuyer: ${r.buyer}\nUntil: ${r.endsAt}`),
-  ].join('\n\n'));
+  const lines = rentals.map((r) => `#${r.id} account #${r.accountId}\nBuyer: ${r.buyer}\nUntil: ${r.endsAt}`);
+  const keyboard = Markup.inlineKeyboard(
+    rentals.map((r) => [Markup.button.callback(`#${r.id} · extend`, `rental_extend_custom:${r.id}`)])
+  );
+
+  await answer(ctx, ['Active rentals', '', ...lines].join('\n\n'), keyboard);
 }
 
 async function showOrders(ctx) {
   const orders = await getOrders();
-
-  if (!orders || orders.length === 0) {
-    await answer(ctx, 'No orders yet.');
-    return;
-  }
-
   await answer(ctx, [
     'Orders',
     '',
@@ -187,6 +193,33 @@ export function createBot(config = getConfig()) {
   bot.action('reviews_back', async (ctx) => {
     await safeAnswerCb(ctx);
     return ctx.editMessageText('Admin menu', mainMenu());
+  });
+
+  bot.action(/^rental_extend_custom:(\d+)$/, async (ctx) => {
+    const rentalId = Number(ctx.match[1]);
+    sessions.set(ctx.from.id, { flow: 'extend_rental', step: 'hours', rentalId, data: { rentalId } });
+    await safeAnswerCb(ctx);
+    return ctx.editMessageText(`Enter extension hours for rental #${rentalId} (for example: 1, 2, 0.5):`, buildRentalExtensionKeyboard(rentalId));
+  });
+
+  bot.action(/^rental_extend:(\d+):(\d+(?:\.\d+)?)$/, async (ctx) => {
+    const rentalId = Number(ctx.match[1]);
+    const hours = Number(ctx.match[2]);
+    await safeAnswerCb(ctx);
+
+    try {
+      const result = await extendActiveRental(rentalId, hours, { reason: 'telegram-admin' });
+      const rental = await getActiveRentals().then((items) => items.find((it) => Number(it.id) === Number(result.rentalId)) || null);
+      const message = [
+        `Rental #${result.rentalId} extended by ${result.hours} hour(s).`,
+        `New end: ${new Date(result.newEndsAt).toISOString()}`,
+        rental?.buyer ? `Buyer: ${rental.buyer}` : null,
+      ].filter(Boolean).join('\n');
+
+      return ctx.editMessageText(message, mainMenu());
+    } catch (err) {
+      return ctx.editMessageText(`Failed to extend rental: ${err.message || err}`, mainMenu());
+    }
   });
 
   async function showReviews(ctx) {
@@ -554,6 +587,44 @@ export function createBot(config = getConfig()) {
 
     if (session?.flow === 'add_account' || session?.flow === 'edit_account' || session?.flow === 'add_mafile') {
       return continueAddAccount(ctx, session);
+    }
+
+    if (session?.flow === 'extend_rental') {
+      const raw = ctx.message?.text?.trim();
+      if (!raw) return ctx.reply('Send extension hours value.');
+
+      const hours = Number(raw);
+      if (!Number.isFinite(hours) || hours <= 0) {
+        return ctx.reply('Value must be a positive number, for example 1, 2, or 0.5.');
+      }
+
+      const rentalId = Number(session.rentalId || session.data?.rentalId);
+      try {
+        const result = await extendActiveRental(rentalId, hours, { reason: 'telegram-admin' });
+        const rental = await getActiveRentals().then((items) => items.find((it) => Number(it.id) === Number(result.rentalId)) || null);
+        const notifyText = `⏳ Администратор продлил аренду на ${result.hours} час(а). Новое время окончания: ${new Date(result.newEndsAt).toISOString()}`;
+
+        if (rental?.buyer && process.env.FUNPAY_GOLDEN_KEY) {
+          try {
+            const { FunpayClient } = await import('../src/funpay/client.js');
+            const funpayClient = new FunpayClient();
+            if (rental.nodeId) {
+              await funpayClient.sendMessage(rental.nodeId, notifyText).catch(() => {});
+            }
+          } catch (err) {
+            console.warn('Buyer notification failed during rental extension:', err.message || err);
+          }
+        }
+
+        sessions.delete(ctx.from.id);
+        return ctx.reply([
+          `Rental #${result.rentalId} extended by ${result.hours} hour(s).`,
+          `New end: ${new Date(result.newEndsAt).toISOString()}`,
+          rental?.buyer ? `Buyer: ${rental.buyer}` : null,
+        ].filter(Boolean).join('\n'));
+      } catch (err) {
+        return ctx.reply(`Failed to extend rental: ${err.message || err}`);
+      }
     }
 
     if (session?.flow === 'claim_review') {

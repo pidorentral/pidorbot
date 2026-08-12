@@ -157,6 +157,7 @@ export function createBot(config = getConfig()) {
       password: session.data.password,
       notes: null,
       mmr: session.data.mmr,
+      steamId: session.data.steamId || null,
     });
 
     if (session.data.sharedSecret) {
@@ -851,6 +852,7 @@ async function continueAddAccount(ctx, session) {
           session.data.sharedSecret = mafileData.sharedSecret;
           session.data.identitySecret = mafileData.identitySecret;
           session.data.steamId = mafileData.steamId;
+          session.data.raw = mafileData.raw;
           session.data.accountName = mafileData.accountName;
 
           if (!session.data.login && mafileData.accountName) {

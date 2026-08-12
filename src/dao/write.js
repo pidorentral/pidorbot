@@ -1,14 +1,14 @@
 import { getClient, query } from '../db.js';
 import * as crypto from '../crypto.js';
 
-export async function addAccount({ title, login, password, notes = null, mmr = null }) {
+export async function addAccount({ title, login, password, notes = null, mmr = null, steamId = null }) {
   const encryptedPassword = crypto.encrypt(password);
 
   const res = await query(
-    `INSERT INTO accounts (title, login, password, notes, mmr, status)
-     VALUES ($1, $2, $3, $4, $5, 'available')
+    `INSERT INTO accounts (title, login, password, notes, mmr, steam_id, status)
+     VALUES ($1, $2, $3, $4, $5, $6, 'available')
      RETURNING id, title, login, status, steam_id, mafile_id, notes, mmr, created_at`,
-    [title, login, encryptedPassword, notes, mmr]
+    [title, login, encryptedPassword, notes, mmr, steamId]
   );
 
   return res.rows[0];

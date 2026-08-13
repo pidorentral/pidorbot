@@ -728,11 +728,11 @@ async function syncBotCommands(bot) {
     console.error('❌ Ошибка обновления команд:', err);
   }
 
-  try {
-    await bot.telegram.setChatMenuButton({ menuButton: { type: 'commands' } });
-  } catch (err) {
-    console.error('❌ Ошибка кнопки меню:', err);
-  }
+  // try {
+  //   await bot.telegram.setChatMenuButton({ menuButton: { type: 'commands' } });
+  // } catch (err) {
+  //   console.error('❌ Ошибка кнопки меню:', err);
+  // }
 }
 
 export async function launchBot() {

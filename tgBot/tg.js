@@ -712,6 +712,16 @@ export function createBot(config = getConfig()) {
     return ctx.reply('Unknown command');
   });
 
+  bot.telegram.setMyCommands(COMMANDS)
+    .then(() => console.log('✅ Список команд успешно обновлен в Telegram'))
+    .catch((err) => console.error('❌ Ошибка обновления команд:', err));
+
+  bot.telegram.setChatMenuButton({
+    menuButton: { type: 'commands' }
+  })
+    .then(() => console.log('✅ Кнопка меню сброшена к стандартному списку команд'))
+    .catch((err) => console.error('❌ Ошибка кнопки меню:', err));
+
   return bot;
 }
 

@@ -773,9 +773,23 @@ export async function updateOrder(orderId, updates = {}) {
   const res = await query(
     `UPDATE orders
      SET ${fields.join(', ')}
-     WHERE id = $${idx}
+     WHERE id = ${idx}
      RETURNING *`,
     values
+  );
+
+  return res.rows[0] || null;
+}
+
+export async function setSteamSessionCookies(accountId, cookies) {
+  const encrypted = crypto.encrypt(JSON.stringify(cookies));
+
+  const res = await query(
+    `UPDATE accounts
+     SET steam_session_cookies = $1
+     WHERE id = $2
+     RETURNING id, title, login, status, steam_id AS "steamId", mafile_id AS "mafileId", notes, created_at AS "createdAt"`,
+    [encrypted, accountId]
   );
 
   return res.rows[0] || null;

@@ -199,3 +199,21 @@ export async function getReviewById(reviewId) {
   return res.rows[0] || null;
 }
 
+export async function getSteamSessionCookies(accountId) {
+  const res = await query(
+    `SELECT steam_session_cookies AS "steamSessionCookies" FROM accounts WHERE id = $1 LIMIT 1`,
+    [accountId]
+  );
+
+  const row = res.rows[0];
+  if (!row || !row.steamSessionCookies) return null;
+
+  try {
+    const decrypted = crypto.decrypt(row.steamSessionCookies);
+    if (!decrypted) return null;
+    return JSON.parse(decrypted);
+  } catch {
+    return null;
+  }
+}
+

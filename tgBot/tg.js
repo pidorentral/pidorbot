@@ -715,21 +715,30 @@ export function createBot(config = getConfig()) {
   return bot;
 }
 
+async function syncBotCommands(bot) {
+  try {
+    await bot.telegram.setMyCommands([], { scope: { type: 'default' } });
+  } catch (err) {
+    console.warn('Warning: failed to clear stale bot commands', err?.message || err);
+  }
+
+  try {
+    await bot.telegram.setMyCommands(COMMANDS, { scope: { type: 'default' } });
+  } catch (err) {
+    console.error('❌ Ошибка обновления команд:', err);
+  }
+
+  try {
+    await bot.telegram.setChatMenuButton({ menuButton: { type: 'commands' } });
+  } catch (err) {
+    console.error('❌ Ошибка кнопки меню:', err);
+  }
+}
+
 export async function launchBot() {
   const bot = createBot();
 
-  await bot.telegram.setMyCommands(COMMANDS, {
-    scope: { type: 'default' },
-    language_code: 'ru',
-  }).catch((err) => {
-    console.error('❌ Ошибка обновления команд:', err);
-  });
-
-  await bot.telegram.setChatMenuButton({
-    menuButton: { type: 'commands' }
-  }).catch((err) => {
-    console.error('❌ Ошибка кнопки меню:', err);
-  });
+  await syncBotCommands(bot);
 
   bot.launch().catch((err) => {
     console.error('Bot launch failed:', err);

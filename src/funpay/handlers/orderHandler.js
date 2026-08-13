@@ -9,21 +9,9 @@ import {
     ensureRental,
     updateOrder,
     extendActiveRental,
+    getActiveAccountOffer,
 } from "../../dao/write.js";
 import { generateSteamGuardCode } from '../../../steam/steamGuard.js';
-
-export function getRentalDurationHours(value = process.env.RENTAL_DURATION_HOURS) {
-  const duration = Number(value || 24);
-  if (!Number.isFinite(duration) || duration <= 0) {
-    throw new Error('RENTAL_DURATION_HOURS must be a positive number');
-  }
-  return duration;
-}
-
-const ALLOWED_LOT_IDS = (process.env.FUNPAY_ALLOWED_LOT_IDS || '')
-  .split(',')
-  .map((s) => s.trim())
-  .filter(Boolean);
 
 export async function handleNewOrders(orders, logger, { client, notifyAdmin }) {
   const processedOrderIds = [];
@@ -44,7 +32,7 @@ export async function handleNewOrders(orders, logger, { client, notifyAdmin }) {
 }
 
 async function processOrder(order, { client, logger, notifyAdmin }) {
-  const { funpayOrderId, buyerId, buyerUsername: buyer, price, lotId, desiredMmr, lotCount = 1 } = order;
+  const { funpayOrderId, buyerId, buyerUsername: buyer, price, lotId, lotCount = 1 } = order;
 
   const existing = await getOrderByFunpayId(funpayOrderId);
   if (existing && existing.status === 'fulfilled') {
@@ -53,16 +41,11 @@ async function processOrder(order, { client, logger, notifyAdmin }) {
   }
 
   const quantity = Math.max(1, Number.isFinite(Number(lotCount)) ? Number(lotCount) : 1);
-  const rentalBaseHours = getRentalDurationHours();
-  const rentalHours = rentalBaseHours * quantity;
-
-  logger.info(
-    `Order #${funpayOrderId}: parsed lotCount=${lotCount}, quantity=${quantity}, baseHours=${rentalBaseHours}, rentalHours=${rentalHours}`
-  );
-
-  if (ALLOWED_LOT_IDS.length > 0 && !ALLOWED_LOT_IDS.includes(String(lotId))) {
-    logger.info(`Order #${funpayOrderId} skipped: lot ${lotId} not in allowed list`);
-    return true;
+  if (!lotId) {
+    const message = `⚠️ Заказ #${funpayOrderId}: не удалось получить ID оффера — выдача остановлена.`;
+    logger.error(message);
+    if (notifyAdmin) await notifyAdmin(message);
+    return false;
   }
 
   // Создаём/обновляем заказ как "paid", а не сразу "fulfilled"
@@ -74,7 +57,6 @@ async function processOrder(order, { client, logger, notifyAdmin }) {
           buyer,
           price,
           status: 'paid',
-          desiredMmr,
           lotId,
           lotCount: quantity,
       });
@@ -91,6 +73,15 @@ async function processOrder(order, { client, logger, notifyAdmin }) {
 
   const existingActiveRental = await getActiveRentalByBuyer(buyer);
   if (existingActiveRental) {
+    const offer = await getActiveAccountOffer(existingActiveRental.accountId, lotId);
+    if (!offer) {
+      const message = `⚠️ Заказ #${funpayOrderId}: оффер ${lotId} не привязан к активному аккаунту #${existingActiveRental.accountId}; выдача остановлена.`;
+      logger.error(message);
+      if (notifyAdmin) await notifyAdmin(message);
+      return false;
+    }
+    const rentalBaseHours = Number(offer.hoursPerLot);
+    const rentalHours = rentalBaseHours * quantity;
     const extension = await extendActiveRental(existingActiveRental.id, rentalHours, {
       reason: `order:${funpayOrderId}`,
     });
@@ -116,15 +107,12 @@ async function processOrder(order, { client, logger, notifyAdmin }) {
     return true;
   }
 
-  const endsAt = new Date(Date.now() + rentalHours * 60 * 60 * 1000);
-
     const reservation = await ensureRental({
       buyer,
-      endsAt,
       orderId: dbOrder.id,
       nodeId,
-      desiredMmr,
-      desiredTitle: order.description || order.title || null
+      offerId: lotId,
+      quantity,
     });
 
   if (!reservation) {
@@ -140,7 +128,7 @@ async function processOrder(order, { client, logger, notifyAdmin }) {
       return;
   }
 
-  const { account, rental } = reservation;
+  const { account, rental, hoursPerLot: rentalBaseHours, rentalHours } = reservation;
 
   logger.info(
     `Order #${funpayOrderId}: reserved account #${account.id}, rentalEndsAt=${new Date(rental.ends_at).toISOString()}, durationHours=${rentalHours}`

@@ -7,16 +7,7 @@ process.env.FUNPAY_GOLDEN_KEY = 'test-key';
 
 const { getChatPollIntervalMs } = await import('../src/funpay/chatPoller.js');
 const { getExpiryCheckIntervalMs } = await import('../src/funpay/rentalExpiry.js');
-const { getRentalDurationHours } = await import('../src/funpay/handlers/orderHandler.js');
-
-test('rejects unsafe runtime intervals and durations', () => {
+test('rejects unsafe runtime intervals', () => {
   assert.throws(() => getChatPollIntervalMs('1000'), /FUNPAY_CHAT_POLL_MS/);
   assert.throws(() => getExpiryCheckIntervalMs('invalid'), /RENTAL_EXPIRY_CHECK_MS/);
-  assert.throws(() => getRentalDurationHours('0'), /RENTAL_DURATION_HOURS/);
-  assert.equal(getRentalDurationHours('1.5'), 1.5);
-});
-
-test('multiplies rental duration by lot count', () => {
-  assert.equal(getRentalDurationHours('1') * 2, 2);
-  assert.equal(getRentalDurationHours('2') * 3, 6);
 });

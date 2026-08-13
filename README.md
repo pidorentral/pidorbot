@@ -36,6 +36,7 @@ ADMIN_IDS=<comma-separated-admin-ids>
 node scripts/createIndexes.js
 node scripts/createReviewsTable.js
 node scripts/createReviewAuditsTable.js
+node scripts/addRentalCleanupLifecycle.js
 ```
 
 4. Start the bot:
@@ -76,3 +77,4 @@ It runs PostgreSQL, migrations, and tests on push.
 - The bot uses `tgBot/tg.js` for Telegram interaction.
 - Review verification is logged in `review_audits` for accountability.
 - Duplicate verification attempts are safe and do not grant duplicate bonuses.
+- Rental teardown is fail-closed: an account becomes available only after its private VM agent confirms that the renter session, Steam, and game were stopped. See [VM cleanup setup](docs/VM_CLEANUP_AGENT.md).

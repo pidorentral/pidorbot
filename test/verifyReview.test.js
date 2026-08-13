@@ -85,13 +85,11 @@ if (!process.env.DATABASE_URL) {
 
   test('handleNewOrders extends the active rental when the same buyer places additional lots', async () => {
     const client = await getClient();
-    const envBefore = process.env.RENTAL_DURATION_HOURS;
-    process.env.RENTAL_DURATION_HOURS = '1';
-
     try {
       await client.query('BEGIN');
 
       const account = await writeDao.addAccount({ title: 'auto-extend account', login: 'auto-extend-login', password: 'p', notes: null });
+      await writeDao.bindAccountOffer(account.id, '99', 1);
       const order = await writeDao.createOrder({ funpayOrderId: 'AUTO-EXTEND-ORDER-1', buyer: 'same-user', price: 1, status: 'paid' });
       const now = new Date();
       const rentalInsert = await client.query(
@@ -109,7 +107,6 @@ if (!process.env.DATABASE_URL) {
           buyerUsername: 'same-user',
           price: 1,
           lotId: 99,
-          desiredMmr: null,
           lotCount: 2,
           description: 'extra lot',
         },
@@ -127,7 +124,6 @@ if (!process.env.DATABASE_URL) {
       assert.equal(updated.rows[0].order_id, order.id);
       assert(updated.rows[0].ends_at > rentalInsert.rows[0].ends_at, 'expected extended end time');
     } finally {
-      process.env.RENTAL_DURATION_HOURS = envBefore;
       await client.query('ROLLBACK').catch(() => {});
       client.release();
     }

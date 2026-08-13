@@ -14,10 +14,9 @@ async function run() {
     await client.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS desired_mmr INTEGER`);
     await client.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS lot_id TEXT`);
     await client.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS lot_count INTEGER DEFAULT 1`);
-    await client.query(`ALTER TABLE accounts ADD COLUMN IF NOT EXISTS mmr INTEGER`);
 
     await client.query('COMMIT');
-    console.log('Added desired_mmr to orders and mmr to accounts');
+    console.log('Added desired_mmr and lot fields to orders');
   } catch (err) {
     await client.query('ROLLBACK');
     console.error('Migration failed:', err);

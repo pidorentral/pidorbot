@@ -27,14 +27,14 @@ function normalizeSteamId(value) {
   return numeric.toString();
 }
 
-export async function addAccount({ title, login, password, notes = null, mmr = null, steamId = null }) {
+export async function addAccount({ title, login, password, notes = null, steamId = null }) {
   const encryptedPassword = crypto.encrypt(password);
 
   const res = await query(
-    `INSERT INTO accounts (title, login, password, notes, mmr, steam_id, status)
-     VALUES ($1, $2, $3, $4, $5, $6, 'available')
-     RETURNING id, title, login, status, steam_id, mafile_id, notes, mmr, created_at`,
-    [title, login, encryptedPassword, notes, mmr, steamId]
+    `INSERT INTO accounts (title, login, password, notes, steam_id, status)
+     VALUES ($1, $2, $3, $4, $5, 'available')
+     RETURNING id, title, login, status, steam_id, mafile_id, notes, created_at`,
+    [title, login, encryptedPassword, notes, steamId]
   );
 
   return res.rows[0];
@@ -134,6 +134,57 @@ export async function createOrder({
   return res.rows[0];
 }
 
+export async function getActiveAccountOffer(accountId, offerId) {
+  const res = await query(
+    `SELECT account_id AS "accountId", funpay_offer_id AS "offerId", hours_per_lot AS "hoursPerLot"
+     FROM account_offers
+     WHERE account_id = $1 AND funpay_offer_id = $2 AND is_active = TRUE`,
+    [accountId, String(offerId)]
+  );
+  return res.rows[0] || null;
+}
+
+export async function bindAccountOffer(accountId, offerId, hoursPerLot) {
+  const hours = Number(hoursPerLot);
+  if (!Number.isFinite(hours) || hours <= 0) {
+    throw new Error('hoursPerLot must be a positive number');
+  }
+
+  const res = await query(
+    `INSERT INTO account_offers (account_id, funpay_offer_id, hours_per_lot, is_active)
+     VALUES ($1, $2, $3, TRUE)
+     ON CONFLICT (account_id, funpay_offer_id)
+     DO UPDATE SET hours_per_lot = EXCLUDED.hours_per_lot, is_active = TRUE
+     RETURNING account_id AS "accountId", funpay_offer_id AS "offerId", hours_per_lot AS "hoursPerLot", is_active AS "isActive"`,
+    [accountId, String(offerId), hours]
+  );
+  return res.rows[0];
+}
+
+export async function unbindAccountOffer(accountId, offerId) {
+  const res = await query(
+    `DELETE FROM account_offers
+     WHERE account_id = $1 AND funpay_offer_id = $2
+     RETURNING account_id AS "accountId", funpay_offer_id AS "offerId"`,
+    [accountId, String(offerId)]
+  );
+  return res.rows[0] || null;
+}
+
+export async function listAccountOffers(accountId = null) {
+  const res = await query(
+    `SELECT ao.account_id AS "accountId", ao.funpay_offer_id AS "offerId",
+            ao.hours_per_lot AS "hoursPerLot", ao.is_active AS "isActive",
+            a.title AS "accountTitle"
+     FROM account_offers ao
+     JOIN accounts a ON a.id = ao.account_id
+     WHERE ($1::integer IS NULL OR ao.account_id = $1)
+     ORDER BY ao.account_id, ao.funpay_offer_id`,
+    [accountId]
+  );
+  return res.rows;
+}
+
 function normalizeTextForMatch(text = '') {
   return String(text || '')
     .toLowerCase()
@@ -193,10 +244,10 @@ function findAccountByTitle(accounts, desiredTitle) {
 
 export async function ensureRental({
   buyer,
-  endsAt,
   orderId,
   nodeId,
-  desiredTitle
+  offerId,
+  quantity = 1,
 }) {
   const client = await getClient();
 
@@ -230,13 +281,26 @@ export async function ensureRental({
 
 
     // Ищем свободные аккаунты (более широкий набор для сравнения по тайтлу)
+    if (!offerId) {
+      throw new Error('Cannot reserve an account without a FunPay offer ID');
+    }
+
+    const normalizedQuantity = Number(quantity);
+    if (!Number.isSafeInteger(normalizedQuantity) || normalizedQuantity < 1) {
+      throw new Error('quantity must be a positive integer');
+    }
+
     const accountRes = await client.query(
-      `SELECT *
-         FROM accounts
-         WHERE status = 'available'
-         ORDER BY id
-         LIMIT 200
-         FOR UPDATE SKIP LOCKED`
+      `SELECT a.*, ao.hours_per_lot AS "hoursPerLot"
+         FROM account_offers ao
+         JOIN accounts a ON a.id = ao.account_id
+         WHERE ao.funpay_offer_id = $1
+           AND ao.is_active = TRUE
+           AND a.status = 'available'
+         ORDER BY a.id
+         LIMIT 1
+         FOR UPDATE OF a SKIP LOCKED`,
+      [String(offerId)]
     );
 
     if (!accountRes.rows.length) {
@@ -245,30 +309,12 @@ export async function ensureRental({
     }
 
     // Подбор исключительно по тайтлу (если указан), иначе берём первый доступный
-    let account = null;
-    if (desiredTitle) {
-      account = findAccountByTitle(accountRes.rows, desiredTitle);
-    } else {
-      account = accountRes.rows[0] || null;
-    }
-
-    if (!account) {
-      await client.query("ROLLBACK");
-      return null;
-    }
+    const account = accountRes.rows[0];
+    const hoursPerLot = Number(account.hoursPerLot);
+    const rentalHours = hoursPerLot * normalizedQuantity;
+    const endsAt = new Date(Date.now() + rentalHours * 60 * 60 * 1000);
 
     // Логируем причину выбора аккаунта
-    try {
-      if (desiredTitle && account._matchScore !== undefined) {
-        const reason = account._matchReason ? `reason=${account._matchReason}` : '';
-        console.info(`ensureRental: selected account #${account.id} (${account.title}) by title match score=${account._matchScore} ${reason}`);
-      } else {
-        console.info(`ensureRental: selected account #${account.id} (${account.title}) as first available`);
-      }
-    } catch (e) {
-      // logging must not break flow
-    }
-
     // Создаём аренду
     const rentalRes = await client.query(
       `INSERT INTO rentals (
@@ -311,7 +357,9 @@ export async function ensureRental({
 
     return {
       account,
-      rental: rentalRes.rows[0]
+      rental: rentalRes.rows[0],
+      hoursPerLot,
+      rentalHours,
     };
 
   } catch (err) {
@@ -348,22 +396,21 @@ export async function completeRental(rentalId) {
       throw new Error('Rental is not active');
     }
 
+    // Do not release the account here. The expiry worker must first terminate
+    // the VM session and confirm cleanup; otherwise a new buyer could receive
+    // an account which is still in use by the previous renter.
     await client.query(
       `UPDATE rentals
-       SET status = 'ended'
-       WHERE id = $1`,
+          SET ends_at = NOW(),
+              cleanup_requested_at = NOW(),
+              cleanup_next_retry_at = NOW(),
+              cleanup_lease_until = NULL
+        WHERE id = $1`,
       [rentalId]
     );
 
-    await client.query(
-      `UPDATE accounts
-       SET status = 'available'
-       WHERE id = $1`,
-      [rental.account_id]
-    );
-
     await client.query('COMMIT');
-    return { rentalId };
+    return { rentalId, cleanupRequested: true };
   } catch (err) {
     await client.query('ROLLBACK');
     throw err;
@@ -383,7 +430,9 @@ export async function extendActiveRental(rentalId, hours = 1, meta = {}) {
     await client.query('BEGIN');
 
     const rentalRes = await client.query(
-      `SELECT id, account_id, ends_at, status
+      `SELECT id, account_id, ends_at, status,
+              cleanup_started_at AS "cleanupStartedAt",
+              cleanup_completed_at AS "cleanupCompletedAt"
        FROM rentals
        WHERE id = $1
        FOR UPDATE`,
@@ -398,9 +447,16 @@ export async function extendActiveRental(rentalId, hours = 1, meta = {}) {
     if (rental.status !== 'active') {
       throw new Error('Rental is not active');
     }
+    if (rental.cleanupStartedAt && !rental.cleanupCompletedAt) {
+      throw new Error('Rental cleanup has already started and cannot be extended');
+    }
 
     const previousEndsAt = new Date(rental.ends_at);
-    const newEndsAt = new Date(previousEndsAt.getTime() + normalizedHours * 60 * 60 * 1000);
+    // A late but valid renewal starts from the current time, not from a point
+    // already in the past. This is the atomic extension point for future
+    // subscription/autorenew integrations.
+    const extensionBase = Math.max(previousEndsAt.getTime(), Date.now());
+    const newEndsAt = new Date(extensionBase + normalizedHours * 60 * 60 * 1000);
 
     const updatedRes = await client.query(
       `UPDATE rentals
@@ -660,18 +716,13 @@ export async function updateAccount(accountId, updates = {}) {
     fields.push(`notes = $${idx++}`);
     values.push(updates.notes);
   }
-  if (updates.mmr !== undefined) {
-    fields.push(`mmr = $${idx++}`);
-    values.push(updates.mmr);
-  }
-
   if (fields.length === 0) {
     const res = await query(`SELECT id, title, login, status, steam_id, notes FROM accounts WHERE id = $1`, [accountId]);
     return res.rows[0] || null;
   }
 
   values.push(accountId);
-  const sql = `UPDATE accounts SET ${fields.join(', ')} WHERE id = $${idx} RETURNING id, title, login, status, steam_id AS "steamId", notes, mmr`;
+  const sql = `UPDATE accounts SET ${fields.join(', ')} WHERE id = $${idx} RETURNING id, title, login, status, steam_id AS "steamId", notes`;
   const res = await query(sql, values);
   return res.rows[0] || null;
 }

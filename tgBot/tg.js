@@ -11,6 +11,9 @@ import {
   setAccountStatus,
   deleteAccount,
   updateAccount,
+  bindAccountOffer,
+  unbindAccountOffer,
+  listAccountOffers,
   createReview,
   getOrderByFunpayId,
   getPendingReviews,
@@ -27,6 +30,9 @@ const COMMANDS = [
   { command: 'accs', description: 'Accounts list' },
   { command: 'active_rentals', description: 'Active rentals' },
   { command: 'add_acc', description: 'Add account draft' },
+  { command: 'bind_offer', description: 'Bind account: /bind_offer <account> <offer> <hours>' },
+  { command: 'unbind_offer', description: 'Remove account-offer binding' },
+  { command: 'offers', description: 'List offer bindings' },
   { command: 'orders', description: 'Orders list' },
   { command: 'settings', description: 'Bot settings' },
   { command: 'claim_review', description: 'Claim review bonus' },
@@ -72,6 +78,42 @@ async function showSettings(ctx) {
   await answer(ctx, ['Settings', '', 'No configurable settings yet.'].join('\n'));
 }
 
+async function bindOfferCommand(ctx) {
+  const [, accountIdRaw, offerId, hoursRaw] = ctx.message.text.trim().split(/\s+/);
+  const accountId = Number(accountIdRaw);
+  const hoursPerLot = Number(hoursRaw);
+
+  if (!Number.isSafeInteger(accountId) || accountId < 1 || !/^\d+$/.test(offerId || '') || !Number.isFinite(hoursPerLot) || hoursPerLot <= 0) {
+    return ctx.reply('Использование: /bind_offer <account_id> <funpay_offer_id> <часов_за_лот>');
+  }
+
+  const binding = await bindAccountOffer(accountId, offerId, hoursPerLot);
+  return ctx.reply(`Аккаунт #${binding.accountId} привязан к офферу ${binding.offerId}: ${binding.hoursPerLot} ч. за лот.`);
+}
+
+async function unbindOfferCommand(ctx) {
+  const [, accountIdRaw, offerId] = ctx.message.text.trim().split(/\s+/);
+  const accountId = Number(accountIdRaw);
+  if (!Number.isSafeInteger(accountId) || accountId < 1 || !/^\d+$/.test(offerId || '')) {
+    return ctx.reply('Использование: /unbind_offer <account_id> <funpay_offer_id>');
+  }
+
+  const binding = await unbindAccountOffer(accountId, offerId);
+  return ctx.reply(binding ? `Привязка #${accountId} → ${offerId} удалена.` : 'Такая привязка не найдена.');
+}
+
+async function showOffers(ctx) {
+  const [, accountIdRaw] = ctx.message.text.trim().split(/\s+/);
+  const accountId = accountIdRaw ? Number(accountIdRaw) : null;
+  if (accountIdRaw && (!Number.isSafeInteger(accountId) || accountId < 1)) {
+    return ctx.reply('Использование: /offers [account_id]');
+  }
+
+  const offers = await listAccountOffers(accountId);
+  if (!offers.length) return ctx.reply('Привязок офферов пока нет.');
+  return ctx.reply(offers.map((offer) => `#${offer.accountId} (${offer.accountTitle}) → ${offer.offerId}: ${offer.hoursPerLot} ч./лот`).join('\n'));
+}
+
 export function createBot(config = getConfig()) {
   const bot = new Telegraf(config.botToken);
 
@@ -97,6 +139,9 @@ export function createBot(config = getConfig()) {
   bot.command('accs', showAccounts);
   bot.command('active_rentals', showActiveRentals);
   bot.command('add_acc', addAccountCommand);
+  bot.command('bind_offer', bindOfferCommand);
+  bot.command('unbind_offer', unbindOfferCommand);
+  bot.command('offers', showOffers);
   bot.command('orders', showOrders);
   bot.command('settings', showSettings);
   bot.command('claim_review', startClaimReview);
@@ -162,7 +207,6 @@ export function createBot(config = getConfig()) {
       login: session.data.login,
       password: session.data.password,
       notes: null,
-      mmr: session.data.mmr,
       steamId: session.data.steamId || null,
     });
 
@@ -542,8 +586,6 @@ export function createBot(config = getConfig()) {
     if (session.data.login) updates.login = session.data.login;
     if (session.data.password && session.data.password.length > 0) updates.password = session.data.password;
     if (session.data.notes !== undefined) updates.notes = session.data.notes;
-    if (session.data.mmr !== undefined) updates.mmr = session.data.mmr;
-
     await updateAccount(session.accountId, updates);
     sessions.delete(ctx.from.id);
     const account = await getAccountById(session.accountId);
@@ -773,7 +815,6 @@ function formatAccountCard(account, options = {}) {
     `Title: ${account.title}`,
     `Login: ${account.login}`,
     `Password: ${password}`,
-    `MMR: ${account.mmr ?? 'unknown'}`,
     `Status: ${account.status}`,
     `Steam Guard: ${account.sharedSecret || account.steamId ? 'connected' : 'not connected'}`,
   ].join('\n');
@@ -784,7 +825,7 @@ function formatAccountsList(accounts) {
     'Accounts:',
     '',
     ...accounts.map((account) => (
-      `#${account.id} ${account.title}\nMMR: ${account.mmr ?? 'unknown'}\nStatus: ${account.status}`
+      `#${account.id} ${account.title}\nStatus: ${account.status}`
     )),
   ].join('\n\n')
 }
@@ -848,7 +889,6 @@ function formatAddAccountConfirm(data) {
     `Title: ${data.title}`,
     `Login: ${data.login}`,
     `Password: ********`,
-    `MMR: ${data.mmr ?? 'none'}`,
     `Steam Guard: ${data.sharedSecret ? 'connected' : 'not_connected'}`,
     data.steamId ? `SteamID: ${data.steamId}` : null,
     '',
@@ -904,11 +944,6 @@ async function continueAddAccount(ctx, session) {
 
       case 'password':
         session.data.password = text;
-        session.step = 'mmr';
-        return ctx.reply('Enter MMR for this account (numeric):');
-
-      case 'mmr':
-        session.data.mmr = Number(text.replace(/\s+/g, '')) || null;
         session.step = 'mafile_choice';
         return ctx.reply(
           'Attach mafile now?',
@@ -974,11 +1009,6 @@ async function continueAddAccount(ctx, session) {
 
       case 'password':
         session.data.password = text;
-        session.step = 'mmr';
-        return ctx.reply(`Enter MMR (current: ${session.data.mmr ?? 'none'}):`);
-
-      case 'mmr':
-        session.data.mmr = Number(text.replace(/\s+/g, '')) || null;
         session.step = 'notes';
         return ctx.reply(`Enter notes (current: ${session.data.notes || ''}):`);
 

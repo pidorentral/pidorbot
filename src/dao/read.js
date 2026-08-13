@@ -4,7 +4,7 @@ import * as crypto from '../crypto.js';
 export async function listAccounts({ status = null, limit = 50, offset = 0 } = {}) {
   const res = await query(
     `
-    SELECT id, title, login, status, steam_id AS "steamId", mafile_id AS "mafileId", notes, mmr, created_at AS "createdAt"
+    SELECT id, title, login, status, steam_id AS "steamId", mafile_id AS "mafileId", notes, created_at AS "createdAt"
     FROM accounts
     WHERE ($1::text IS NULL OR status = $1)
     ORDER BY created_at DESC
@@ -49,7 +49,7 @@ export async function getAccountById(id, { includeSecrets = false } = {}) {
 
   const res = await query(
     `
-    SELECT a.id, a.title, a.login, a.status, a.steam_id AS "steamId", a.mafile_id AS "mafileId", a.notes, a.mmr, a.created_at AS "createdAt"${secrets}
+    SELECT a.id, a.title, a.login, a.status, a.steam_id AS "steamId", a.mafile_id AS "mafileId", a.notes, a.created_at AS "createdAt"${secrets}
     FROM accounts a
     LEFT JOIN mafiles m ON m.id = a.mafile_id
     WHERE a.id = $1

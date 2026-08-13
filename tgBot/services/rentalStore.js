@@ -86,6 +86,18 @@ export async function updateAccount(accountId, updates) {
   return writeDao.updateAccount(accountId, updates);
 }
 
+export async function bindAccountOffer(accountId, offerId, hoursPerLot) {
+  return writeDao.bindAccountOffer(accountId, offerId, hoursPerLot);
+}
+
+export async function unbindAccountOffer(accountId, offerId) {
+  return writeDao.unbindAccountOffer(accountId, offerId);
+}
+
+export async function listAccountOffers(accountId = null) {
+  return writeDao.listAccountOffers(accountId);
+}
+
 export default {
   getStats,
   getAccounts,
@@ -103,6 +115,9 @@ export default {
   setAccountStatus,
   deleteAccount,
   updateAccount,
+  bindAccountOffer,
+  unbindAccountOffer,
+  listAccountOffers,
   createReview,
   getPendingReviews,
   getReviewById,

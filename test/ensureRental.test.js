@@ -7,13 +7,13 @@ if (!process.env.ENCRYPTION_KEY) {
   process.env.ENCRYPTION_KEY = Buffer.alloc(32).toString('base64');
 }
 
-import { addAccount, createOrder, ensureRental } from '../src/dao/write.js';
+import { addAccount, bindAccountOffer, createOrder, ensureRental } from '../src/dao/write.js';
 import { query } from '../src/db.js';
 
 if (!process.env.DATABASE_URL) {
-  test.skip('ensureRental selects account by title (skipped) - DATABASE_URL not set', () => {});
+  test.skip('ensureRental selects account by offer ID (skipped) - DATABASE_URL not set', () => {});
 } else {
-  test('ensureRental selects account by title', async () => {
+  test('ensureRental selects account by offer ID', async () => {
   const marker = `test-${Date.now()}-${Math.random().toString(36).slice(2,6)}`;
   const matchingTitle = `Dota pro ${marker}`;
   const otherTitle = `Other ${marker}`;
@@ -25,15 +25,15 @@ if (!process.env.DATABASE_URL) {
   try {
     acc1 = await addAccount({ title: matchingTitle, login: `l1-${marker}`, password: 'p1' });
     acc2 = await addAccount({ title: otherTitle, login: `l2-${marker}`, password: 'p2' });
+    await bindAccountOffer(acc1.id, `offer-${marker}`, 1);
 
     order = await createOrder({ funpayOrderId: `FT-${marker}`, buyer: 'buyer1', price: 1, status: 'paid' });
 
-    const endsAt = new Date(Date.now() + 60 * 60 * 1000);
-
-    const reservation = await ensureRental({ buyer: 'buyer1', endsAt, orderId: order.id, nodeId: 1, desiredTitle: matchingTitle });
+    const reservation = await ensureRental({ buyer: 'buyer1', orderId: order.id, nodeId: 1, offerId: `offer-${marker}`, quantity: 2 });
 
     assert(reservation && reservation.account, 'reservation not created');
-    assert.equal(reservation.account.id, acc1.id, 'did not pick expected account by title');
+    assert.equal(reservation.account.id, acc1.id, 'did not pick account bound to offer');
+    assert.equal(reservation.rentalHours, 2);
   } finally {
     if (acc1 || acc2) {
       await query('UPDATE accounts SET status = $1 WHERE id = ANY($2)', ['available', [acc1?.id, acc2?.id].filter(Boolean)]);

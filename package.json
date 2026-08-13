@@ -8,7 +8,8 @@
     "db:smoke": "node --env-file=.env scripts/dbSmoke.js",
     "funpay:check": "node --env-file=.env scripts/funpayCheck.js",
     "db:create-indexes": "node --env-file=.env scripts/createIndexes.js",
-    "db:encrypt-mafiles": "node --env-file=.env scripts/encryptMafilePayloads.js"
+    "db:encrypt-mafiles": "node --env-file=.env scripts/encryptMafilePayloads.js",
+    "db:migrate-account-offers": "node --env-file=.env scripts/migrateAccountOffers.js"
   },
   "dependencies": {
     "crypto": "^1.0.1",

@@ -10,7 +10,7 @@ function normalizeSteamId(value) {
         return null;
     }
 
-    const numeric = BigInt(raw);
+    const numeric= BigInt(raw);
     const candidate = numeric - 8n;
     const minimumSteamId = 76561197960265728n;
 

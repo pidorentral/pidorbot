@@ -9,6 +9,13 @@ export class FunpayAuthError extends Error {
   }
 }
 
+export class FunpayRateLimitError extends Error {
+  constructor(message = 'FunPay rate limit exceeded') {
+    super(message);
+    this.name = 'FunpayRateLimitError';
+  }
+}
+
 function getGoldenKey() {
   const key = process.env.FUNPAY_GOLDEN_KEY?.trim();
   if (!key) throw new Error('FUNPAY_GOLDEN_KEY is not configured');
@@ -147,7 +154,13 @@ export class FunpayClient {
     if (!response.ok) {
       const bodyText = await response.text().catch(() => '');
       const bodySnippet = bodyText.slice(0, 400).replace(/\s+/g, ' ').trim();
-      throw new Error(`FunPay request failed with HTTP ${response.status}${bodySnippet ? `: ${bodySnippet}` : ''}`);
+      const message = `FunPay request failed with HTTP ${response.status}${bodySnippet ? `: ${bodySnippet}` : ''}`;
+
+      if (response.status === 429) {
+        throw new FunpayRateLimitError(message);
+      }
+
+      throw new Error(message);
     }
     return response;
   }

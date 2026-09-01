@@ -47,6 +47,10 @@ function acquireSingletonLock() {
 acquireSingletonLock();
 
 try {
+  const { startCleanupRetryWorker } = await import('./steam/cleanupRetryWorker.js');
+
+  startCleanupRetryWorker(console, 60000); // каждые 60s
+
   await import('./main.js');
 } catch (error) {
   console.error('Bootstrap fatal:', error);

@@ -1,5 +1,7 @@
 import { Telegraf, Markup } from 'telegraf';
 import { getConfig } from './config.js';
+import { query } from '../src/db.js';
+import { SteamAccountRecoverer, formatSteamError } from '../steam/accountRecoverer.js';
 import {
   addAccount,
   attachMafileToAccount,
@@ -23,6 +25,7 @@ import {
 } from './services/rentalStore.js';
 import { parseMafile } from '../steam/mafile.js';
 import { generateSteamGuardCode } from '../steam/steamGuard.js';
+import * as crypto from '../src/crypto.js';
 
 const COMMANDS = [
   { command: 'stats', description: 'Summary: accounts, rentals, orders' },
@@ -30,6 +33,7 @@ const COMMANDS = [
   { command: 'accs', description: 'Accounts list' },
   { command: 'active_rentals', description: 'Active rentals' },
   { command: 'add_acc', description: 'Add account draft' },
+  { command: 'recover_test', description: 'Run Steam recovery smoke test: /recover_test <account_id>' },
   { command: 'bind_offer', description: 'Bind account: /bind_offer <account> <offer> <hours>' },
   { command: 'unbind_offer', description: 'Remove account-offer binding' },
   { command: 'offers', description: 'List offer bindings' },
@@ -37,6 +41,156 @@ const COMMANDS = [
   { command: 'settings', description: 'Bot settings' },
   { command: 'claim_review', description: 'Claim review bonus' },
 ];
+
+export function parseSteamCookiesInput(rawInput) {
+  if (!rawInput || typeof rawInput !== 'string') {
+    return null;
+  }
+
+  const text = rawInput.trim();
+  if (!text || text.toLowerCase() === 'skip') {
+    return null;
+  }
+
+  const tryParseJson = () => {
+    try {
+      const parsed = JSON.parse(text);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        const result = {};
+        for (const [key, value] of Object.entries(parsed)) {
+          if (value != null && String(value).length > 0) {
+            result[key] = String(value);
+          }
+        }
+        return Object.keys(result).length > 0 ? result : null;
+      }
+    } catch {
+      // fall through to cookie-header parsing
+    }
+    return null;
+  };
+
+  const parsedJson = tryParseJson();
+  if (parsedJson) {
+    return parsedJson;
+  }
+
+  const entries = {};
+  const pairs = text.split(';');
+  for (const pair of pairs) {
+    const trimmed = pair.trim();
+    if (!trimmed) continue;
+    const index = trimmed.indexOf('=');
+    if (index === -1) continue;
+    const key = trimmed.slice(0, index).trim();
+    const value = trimmed.slice(index + 1).trim();
+    if (!key || !value) continue;
+    entries[key] = value;
+  }
+
+  if (!entries.sessionid && !entries.steamLoginSecure && !entries.steamRememberLogin && !entries.steamMachineAuth) {
+    return null;
+  }
+
+  return entries;
+}
+
+export function extractSteamCookiesFromMafile(rawValue) {
+  if (!rawValue) {
+    return null;
+  }
+
+  try {
+    const tryDecryptString = (candidate) => {
+      if (typeof candidate !== 'string') {
+        return null;
+      }
+
+      const decrypted = crypto.decrypt(candidate);
+      if (!decrypted) {
+        return null;
+      }
+
+      try {
+        const parsed = JSON.parse(decrypted);
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          return parsed.cookies || parsed;
+        }
+      } catch {
+        // fall through to plain decrypted text inspection below
+      }
+
+      try {
+        const parsed = JSON.parse(decrypted.replace(/^['"]|['"]$/g, ''));
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          return parsed.cookies || parsed;
+        }
+      } catch {
+        // no-op
+      }
+
+      return null;
+    };
+
+    let raw = rawValue;
+    if (typeof raw === 'string') {
+      try {
+        const parsed = JSON.parse(raw);
+        if (typeof parsed === 'string') {
+          const decrypted = tryDecryptString(parsed);
+          if (decrypted) {
+            return decrypted;
+          }
+          raw = parsed;
+        } else if (parsed && typeof parsed === 'object') {
+          raw = parsed;
+        }
+      } catch {
+        // raw is already a plain cookie JSON string, keep it as is
+      }
+    }
+
+    if (typeof raw === 'string') {
+      const decrypted = tryDecryptString(raw);
+      if (decrypted) {
+        return decrypted;
+      }
+    }
+
+    if (typeof raw === 'string') {
+      try {
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          return parsed.cookies || parsed;
+        }
+      } catch {
+        // raw is not JSON
+      }
+    }
+
+    if (raw && typeof raw === 'object') {
+      return raw.cookies || raw;
+    }
+
+    if (typeof rawValue === 'string') {
+      try {
+        const decrypted = JSON.parse(rawValue);
+        if (typeof decrypted === 'string') {
+          const nested = tryDecryptString(decrypted);
+          if (nested) {
+            return nested;
+          }
+        }
+      } catch {
+        // no-op: rawValue is not decrypted text
+      }
+    }
+
+    return null;
+  } catch {
+    return null;
+  }
+}
 
 function buildRentalExtensionKeyboard(rentalId) {
   return Markup.inlineKeyboard([
@@ -139,6 +293,7 @@ export function createBot(config = getConfig()) {
   bot.command('accs', showAccounts);
   bot.command('active_rentals', showActiveRentals);
   bot.command('add_acc', addAccountCommand);
+  bot.command('recover_test', recoverTestCommand);
   bot.command('bind_offer', bindOfferCommand);
   bot.command('unbind_offer', unbindOfferCommand);
   bot.command('offers', showOffers);
@@ -210,15 +365,27 @@ export function createBot(config = getConfig()) {
       steamId: session.data.steamId || null,
     });
 
-    if (session.data.sharedSecret) {
-      await attachMafileToAccount(account.id, {
-        sharedSecret: session.data.sharedSecret,
-        identitySecret: session.data.identitySecret,
-        rawJson: session.data.raw,
-      });
-    }
+    const attachMafileData = (() => {
+      const hasMafile = Boolean(session.data.raw || session.data.sharedSecret || session.data.identitySecret);
+      const hasCookies = Boolean(session.data.cookies && Object.keys(session.data.cookies).length > 0);
+      if (!hasMafile && !hasCookies) {
+        return null;
+      }
 
-    //console.log(account)
+      const rawJson = hasMafile
+        ? { ...(session.data.raw || {}), ...(hasCookies ? { cookies: session.data.cookies } : {}) }
+        : { ...(hasCookies ? { cookies: session.data.cookies } : {}) };
+
+      return {
+        sharedSecret: session.data.sharedSecret || null,
+        identitySecret: session.data.identitySecret || null,
+        rawJson,
+      };
+    })();
+
+    if (attachMafileData) {
+      await attachMafileToAccount(account.id, attachMafileData);
+    }
 
     sessions.delete(ctx.from.id);
 
@@ -460,6 +627,33 @@ export function createBot(config = getConfig()) {
     }
   });
 
+  bot.action(/^acc_test_recovery:(\d+)$/, async (ctx) => {
+    const accountId = Number(ctx.match[1]);
+    const account = await getAccountById(accountId, { includeSecrets: true });
+
+    if (!account) {
+      await safeAnswerCb(ctx, 'Account not found.');
+      return ctx.editMessageText('Account not found.');
+    }
+
+    await safeAnswerCb(ctx, 'Starting recovery test...');
+
+    const result = await runRecoverySmokeTest(accountId);
+    const currentMessageText = ctx.update?.callback_query?.message?.text;
+    if (currentMessageText === result.message) {
+      return;
+    }
+    try {
+      return ctx.editMessageText(result.message, accountCardKeyboard(account));
+    } catch (err) {
+      const desc = err?.response?.description || err?.message || '';
+      if (typeof desc === 'string' && desc.includes('Message is not modified')) {
+        return;
+      }
+      throw err;
+    }
+  });
+
   // Disable / enable flow: ask for confirmation
   bot.action(/^acc_disable:(\d+)$/, async (ctx) => {
     const accountId = Number(ctx.match[1]);
@@ -612,6 +806,34 @@ export function createBot(config = getConfig()) {
   });
 
   bot.action('add_acc_mafile_skip', async (ctx) => {
+    const session = sessions.get(ctx.from.id);
+
+    if (!session || session.flow !== 'add_account') {
+      return safeAnswerCb(ctx, 'No active add account flow');
+    }
+
+    session.step = 'cookies_choice';
+
+    await safeAnswerCb(ctx);
+    return ctx.editMessageText('Attach active Steam cookies now?', Markup.inlineKeyboard([
+      [Markup.button.callback('Yes', 'add_acc_cookies_yes'), Markup.button.callback('Skip', 'add_acc_cookies_skip')],
+    ]));
+  });
+
+  bot.action('add_acc_cookies_yes', async (ctx) => {
+    const session = sessions.get(ctx.from.id);
+
+    if (!session || session.flow !== 'add_account') {
+      return safeAnswerCb(ctx, 'No active add account flow');
+    }
+
+    session.step = 'cookies';
+
+    await safeAnswerCb(ctx);
+    return ctx.editMessageText('Send Steam cookies as JSON or semicolon string, for example: {"sessionid":"...","steamLoginSecure":"..."}');
+  });
+
+  bot.action('add_acc_cookies_skip', async (ctx) => {
     const session = sessions.get(ctx.from.id);
 
     if (!session || session.flow !== 'add_account') {
@@ -795,6 +1017,85 @@ async function safeAnswerCb(ctx, ...args) {
 
 // /stats
 
+async function runRecoverySmokeTest(accountId) {
+  const account = await getAccountById(accountId, { includeSecrets: true });
+
+  if (!account) {
+    return { ok: false, message: 'Account not found.' };
+  }
+
+  if (!account.sharedSecret) {
+    return { ok: false, message: 'Recovery test requires a valid Steam mafile. Add mafile first.' };
+  }
+
+  let cookies = null;
+  try {
+    const mafileRes = await query(
+      `SELECT raw_json AS "rawJson" FROM mafiles WHERE account_id = $1 LIMIT 1`,
+      [accountId]
+    );
+    const raw = mafileRes.rows[0]?.rawJson;
+
+    if (raw) {
+      const direct = extractSteamCookiesFromMafile(raw);
+      if (direct) {
+        cookies = direct;
+      }
+    }
+  } catch (err) {
+    console.warn('Could not read mafile raw cookies for account', accountId, err.message || err);
+  }
+
+  if (!cookies || !cookies.sessionid || !cookies.steamLoginSecure) {
+    return { ok: false, message: 'Recovery test needs active Steam cookies (sessionid + steamLoginSecure). Add cookies to the mafile or account.' };
+  }
+
+  if (!account.password) {
+    return { ok: false, message: 'This account has no stored password, so recovery test cannot run.' };
+  }
+
+  const tempPassword = `Test_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}!`;
+  const recoverer = new SteamAccountRecoverer({
+    login: account.login,
+    oldPassword: account.password,
+    newPassword: tempPassword,
+    sharedSecret: account.sharedSecret,
+    cookies,
+  });
+
+  try {
+    await recoverer.executeRecovery();
+    return {
+      ok: true,
+      message: [
+        `Recovery test completed for account #${account.id}.`,
+        `Temporary password: ${tempPassword}`,
+        'Result: success',
+      ].join('\n'),
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      message: [
+        `Recovery test failed for account #${account.id}.`,
+        `Error: ${formatSteamError(err)}`,
+      ].join('\n'),
+    };
+  }
+}
+
+async function recoverTestCommand(ctx) {
+  const [, rawAccountId] = ctx.message.text.trim().split(/\s+/);
+  const accountId = Number(rawAccountId);
+
+  if (!Number.isSafeInteger(accountId) || accountId < 1) {
+    return ctx.reply('Usage: /recover_test <account_id>');
+  }
+
+  const result = await runRecoverySmokeTest(accountId);
+  return ctx.reply(result.message);
+}
+
 async function showStats(ctx) {
   const stats = await getStats();
 
@@ -862,16 +1163,20 @@ function accountCardKeyboard(account) {
     firstRow.push(Markup.button.callback('Add mafile', `acc_add_mafile:${account.id}`));
   }
 
+  const canTestRecovery = Boolean(account.sharedSecret || account.mafileId) && Boolean(account.password);
   const disableButtonLabel = account.status === 'disabled' ? 'Enable' : 'Disable';
 
   return Markup.inlineKeyboard([
     firstRow,
     [
-      Markup.button.callback('Edit', `acc_edit:${account.id}`),
+      ...(canTestRecovery ? [Markup.button.callback('Test recovery', `acc_test_recovery:${account.id}`)] : []),
       Markup.button.callback(disableButtonLabel, `acc_disable:${account.id}`),
     ],
     [
+      Markup.button.callback('Edit', `acc_edit:${account.id}`),
       Markup.button.callback('Delete', `acc_delete:${account.id}`),
+    ],
+    [
       Markup.button.callback('Back', 'accs_back'),
     ],
   ]);
@@ -910,6 +1215,7 @@ function formatAddAccountConfirm(data) {
     `Login: ${data.login}`,
     `Password: ********`,
     `Steam Guard: ${data.sharedSecret ? 'connected' : 'not_connected'}`,
+    `Steam cookies: ${data.cookies && Object.keys(data.cookies).length ? 'connected' : 'not_connected'}`,
     data.steamId ? `SteamID: ${data.steamId}` : null,
     '',
     'Save account?',
@@ -985,11 +1291,24 @@ async function continueAddAccount(ctx, session) {
             session.data.login = mafileData.accountName;
           }
 
-          session.step = 'confirm';
-          return ctx.reply(formatAddAccountConfirm(session.data), addAccountConfirmKeyboard());
+          session.step = 'cookies_choice';
+          return ctx.reply('Attach active Steam cookies now?', Markup.inlineKeyboard([
+            [Markup.button.callback('Yes', 'add_acc_cookies_yes'), Markup.button.callback('Skip', 'add_acc_cookies_skip')],
+          ]));
         } catch (err) {
           return ctx.reply(`Error parsing mafile: ${err.message}`);
         }
+
+      case 'cookies': {
+        const cookies = parseSteamCookiesInput(text);
+        if (!cookies) {
+          return ctx.reply('Invalid Steam cookies. Send valid JSON or a semicolon-separated cookie string, or type skip.');
+        }
+
+        session.data.cookies = cookies;
+        session.step = 'confirm';
+        return ctx.reply(formatAddAccountConfirm(session.data), addAccountConfirmKeyboard());
+      }
 
       default:
         sessions.delete(ctx.from.id);

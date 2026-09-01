@@ -37,3 +37,16 @@ test('refreshes CSRF token from fresh app data on each request', async () => {
   assert.equal(secondToken, 'token-2');
   assert.equal(callCount, 2);
 });
+
+test('throws a dedicated rate-limit error on FunPay 429 responses', async () => {
+  const client = new FunpayClient({
+    goldenKey: 'test-key',
+    fetchImpl: async () => new Response('<html><body>429 Too Many Requests</body></html>', { status: 429 }),
+  });
+
+  await assert.rejects(
+    () => client.request('health'),
+    (error) => error.name === 'FunpayRateLimitError' && /429/.test(error.message),
+    'Should convert 429 into a rate-limit error',
+  );
+});

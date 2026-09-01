@@ -30,9 +30,7 @@ export function createChatPoller({
       const newMessages = [];
 
       for (const chat of chats) {
-        const prevId = lastMsgIdByNode.get(chat.nodeId) ?? chat.lastMsgId; 
-        // ^ при первом запуске просто запоминаем текущее состояние, чтобы не
-        //   среагировать на старую переписку задним числом
+        const prevId = lastMsgIdByNode.get(chat.nodeId) ?? chat.lastMsgId;
 
         if (!lastMsgIdByNode.has(chat.nodeId)) {
           lastMsgIdByNode.set(chat.nodeId, chat.lastMsgId);
@@ -57,6 +55,15 @@ export function createChatPoller({
     } catch (err) {
       if (err instanceof FunpayAuthError) {
         logger.error('FunPay session expired during chat poll');
+      }
+      if (err?.name === 'FunpayRateLimitError') {
+        logger.warn(`FunPay chat poll rate limited; backing off for ${intervalMs * 2}ms`);
+        if (timer) {
+          clearInterval(timer);
+          timer = setInterval(() => {
+            void pollOnce().catch((e) => logger.error(`Chat poll error: ${e.message}`));
+          }, intervalMs * 2);
+        }
       }
       throw err;
     } finally {

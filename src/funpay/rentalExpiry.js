@@ -1,6 +1,7 @@
 import { getClient, query } from '../db.js';
 import { extendActiveRental } from '../dao/write.js';
 import { createCleanupAgentClient } from '../rentals/cleanupAgentClient.js';
+import { deauthorizeAllDevices } from '../../steam/accountRecoverer.js';
 
 const DEFAULT_CHECK_INTERVAL_MS = 30_000;
 const DEFAULT_RENEWAL_GRACE_MS = 120_000;
@@ -85,6 +86,7 @@ async function claimCleanup(rentalId, { renewalGraceMs, cleanupLeaseMs }) {
               r.cleanup_completed_at AS "cleanupCompletedAt",
               r.cleanup_next_retry_at AS "cleanupNextRetryAt",
               r.cleanup_attempts AS "cleanupAttempts",
+              r.session_cookies AS "sessionCookies",
               a.title,
               a.login
          FROM rentals r
@@ -226,6 +228,24 @@ async function notifyRentalEnded(rental, { client, notifyAdmin, logger }) {
   }
 }
 
+async function deauthorizeRental(rental) {
+  let cookies;
+  try {
+    cookies = typeof rental.sessionCookies === 'string'
+      ? JSON.parse(rental.sessionCookies)
+      : rental.sessionCookies;
+  } catch {
+    throw new Error('Stored rental cookies are not valid JSON; manual review is required');
+  }
+
+  if (!cookies?.sessionid || !cookies?.steamLoginSecure) {
+    throw new Error('Rental is missing sessionid and steamLoginSecure; manual review is required');
+  }
+
+  // Deauthorize before VM cleanup so the renter loses Steam access as the first action.
+  return deauthorizeAllDevices(cookies.sessionid, cookies.steamLoginSecure);
+}
+
 async function tryAutomaticRenewal(rental, { renewalResolver, logger, notifyAdmin }) {
   if (!renewalResolver || rental.cleanupStartedAt) return false;
 
@@ -284,6 +304,25 @@ export function createExpiryChecker({
     const claimed = await claimCleanup(rental.id, { renewalGraceMs, cleanupLeaseMs });
     if (!claimed) return 'skipped';
 
+    try {
+      await deauthorizeRental(claimed);
+      logger.info(`Steam devices deauthorized for rental #${claimed.id}`);
+    } catch (error) {
+      const reason = error?.requiresManualReview
+        ? `Manual review required: ${cleanError(error)}`
+        : cleanError(error);
+      const failure = await markCleanupFailed(claimed.id, reason, {
+        attempt: claimed.cleanupAttempts,
+        retryInitialMs,
+        retryMaxMs,
+      });
+      logger.warn(`Steam deauthorization failed for rental #${claimed.id}; retry at ${failure.nextRetryAt.toISOString()}`);
+      if (notifyAdmin) {
+        await notifyAdmin(`🚨 Не удалось выкинуть сессии из аренды #${claimed.id}.\n${reason}`);
+      }
+      return 'failed';
+    }
+
     const result = await cleanupAgent.cleanupRental({
       rentalId: claimed.id,
       accountId: claimed.accountId,
@@ -334,6 +373,7 @@ export function createExpiryChecker({
               r.cleanup_completed_at AS "cleanupCompletedAt",
               r.cleanup_next_retry_at AS "cleanupNextRetryAt",
               r.cleanup_attempts AS "cleanupAttempts",
+              r.session_cookies AS "sessionCookies",
               a.title,
               a.login
          FROM rentals r

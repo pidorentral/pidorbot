@@ -34,6 +34,7 @@ export function createFunpayPoller({
   let timer = null;
   let polling = false;
   let initialSnapshotLoaded = false;
+  let rateLimitCooldownMs = 30_000;
   const seenOrderIds = new Set();
   const seenOrderIdQueue = [];
 
@@ -47,37 +48,44 @@ export function createFunpayPoller({
   }
 
   async function pollOnce() {
-  if (polling) return [];
-  polling = true;
+    if (polling) return [];
+    polling = true;
 
-  try {
-    const orders = await client.getNewOrders();
-    const unseenOrders = orders.filter((order) => !seenOrderIds.has(order.funpayOrderId));
+    try {
+      const orders = await client.getNewOrders();
+      const unseenOrders = orders.filter((order) => !seenOrderIds.has(order.funpayOrderId));
 
-    if (!initialSnapshotLoaded) {
-      initialSnapshotLoaded = true;
-      logger.info(`FunPay observer started; existing new orders: ${orders.length}`);
-      // Раньше здесь было return [] — убираем этот ранний выход.
-      // Пусть даже на первом опросе заказы уходят в onNewOrders;
-      // идемпотентность (existing.status === 'fulfilled') в processOrder
-      // защитит от повторной обработки уже выполненных заказов.
-    }
+      if (!initialSnapshotLoaded) {
+        initialSnapshotLoaded = true;
+        logger.info(`FunPay observer started; existing new orders: ${orders.length}`);
+      }
 
-    if (unseenOrders.length) {
-      const processedOrderIds = await onNewOrders(unseenOrders, logger);
-      const processedIds = new Set(processedOrderIds ?? unseenOrders.map((order) => order.funpayOrderId));
+      if (unseenOrders.length) {
+        const processedOrderIds = await onNewOrders(unseenOrders, logger);
+        const processedIds = new Set(processedOrderIds ?? unseenOrders.map((order) => order.funpayOrderId));
 
-      for (const order of unseenOrders) {
-        if (processedIds.has(order.funpayOrderId)) {
-          rememberOrder(order.funpayOrderId);
+        for (const order of unseenOrders) {
+          if (processedIds.has(order.funpayOrderId)) {
+            rememberOrder(order.funpayOrderId);
+          }
         }
       }
+      return unseenOrders;
+    } catch (error) {
+      if (error?.name === 'FunpayRateLimitError') {
+        logger.warn(`FunPay rate limited; backing off for ${rateLimitCooldownMs}ms`);
+        if (timer) {
+          clearInterval(timer);
+          timer = setInterval(() => {
+            void pollOnce().catch((err) => logger.error(`FunPay polling error: ${err.message}`));
+          }, rateLimitCooldownMs);
+        }
+      }
+      throw error;
+    } finally {
+      polling = false;
     }
-    return unseenOrders;
-  } finally {
-    polling = false;
   }
-}
 
   function start() {
     if (timer) return;

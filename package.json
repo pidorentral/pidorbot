@@ -9,10 +9,13 @@
     "funpay:check": "node --env-file=.env scripts/funpayCheck.js",
     "db:create-indexes": "node --env-file=.env scripts/createIndexes.js",
     "db:encrypt-mafiles": "node --env-file=.env scripts/encryptMafilePayloads.js",
-    "db:migrate-account-offers": "node --env-file=.env scripts/migrateAccountOffers.js"
+    "db:migrate-account-offers": "node --env-file=.env scripts/migrateAccountOffers.js",
+    "db:cleanup-retry": "node --env-file=.env scripts/cleanupRetryMigration.js"
   },
   "dependencies": {
+    "big-integer": "^1.6.52",
     "crypto": "^1.0.1",
+    "crypto-js": "^4.2.0",
     "dotenv": "^17.4.2",
     "pg": "^8.22.0",
     "playwright": "^1.62.1",

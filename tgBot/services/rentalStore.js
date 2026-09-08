@@ -17,6 +17,10 @@ export async function getActiveRentals() {
   return readDao.getActiveRentals();
 }
 
+export async function getRentalCleanupHistory(limit = 20) {
+  return readDao.getRentalCleanupHistory(limit);
+}
+
 export async function getOrders(opts = {}) {
   return readDao.getOrders(opts);
 }
@@ -27,6 +31,10 @@ export async function addAccount(payload) {
 
 export async function attachMafileToAccount(accountId, mafile) {
   return writeDao.attachMafileToAccount(accountId, mafile);
+}
+
+export async function updateMafileCookies(accountId, cookies) {
+  return writeDao.updateMafileCookies(accountId, cookies);
 }
 
 export async function createOrder(payload) {
@@ -103,9 +111,11 @@ export default {
   getAccounts,
   getAccountById,
   getActiveRentals,
+  getRentalCleanupHistory,
   getOrders,
   addAccount,
   attachMafileToAccount,
+  updateMafileCookies,
   createOrder,
   getOrderByFunpayId,
   getOrderById,

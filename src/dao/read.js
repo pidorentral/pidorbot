@@ -104,6 +104,29 @@ export async function getActiveRentals() {
   return res.rows;
 }
 
+export async function getRentalCleanupHistory(limit = 20) {
+  const res = await query(
+    `
+    SELECT r.id, r.account_id AS "accountId", a.title, r.buyer,
+           r.status, r.ends_at AS "endsAt",
+           r.cleanup_status AS "cleanupStatus",
+           r.cleanup_attempts AS "cleanupAttempts",
+           r.cleanup_next_retry_at AS "cleanupNextRetryAt",
+           r.cleanup_completed_at AS "cleanupCompletedAt",
+           r.cleanup_last_error AS "cleanupLastError"
+    FROM rentals r
+    JOIN accounts a ON a.id = r.account_id
+    WHERE r.status <> 'active'
+       OR r.cleanup_started_at IS NOT NULL
+       OR r.cleanup_requested_at IS NOT NULL
+    ORDER BY COALESCE(r.cleanup_completed_at, r.cleanup_next_retry_at, r.ends_at) DESC
+    LIMIT $1
+    `,
+    [limit],
+  );
+  return res.rows;
+}
+
 export async function getOrders({ status = null, limit = 50, offset = 0 } = {}) {
   const res = await query(
     `

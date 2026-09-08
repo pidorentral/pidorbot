@@ -1,6 +1,5 @@
 import { getClient, query } from '../db.js';
-import { extendActiveRental } from '../dao/write.js';
-import { createCleanupAgentClient } from '../rentals/cleanupAgentClient.js';
+import { extendActiveRental, setAccountStatus } from '../dao/write.js';
 import { deauthorizeAllDevices } from '../../steam/accountRecoverer.js';
 
 const DEFAULT_CHECK_INTERVAL_MS = 30_000;
@@ -66,7 +65,7 @@ function isRentalReadyForCleanup(rental, now, renewalGraceMs) {
 }
 
 function cleanError(error) {
-  return String(error?.message || error || 'VM cleanup failed').replace(/[\r\n]+/g, ' ').slice(0, 500);
+  return String(error?.message || error || 'Steam cleanup failed').replace(/[\r\n]+/g, ' ').slice(0, 500);
 }
 
 async function claimCleanup(rentalId, { renewalGraceMs, cleanupLeaseMs }) {
@@ -123,7 +122,7 @@ async function claimCleanup(rentalId, { renewalGraceMs, cleanupLeaseMs }) {
     );
 
     // Fail closed: even if an older/manual operation made the account available,
-    // it cannot be assigned while the VM cleanup job is running.
+    // it cannot be assigned while Steam cleanup is running.
     await dbClient.query(
       `UPDATE accounts
           SET status = 'rented'
@@ -170,6 +169,7 @@ async function markCleanupSucceeded(rentalId) {
       `UPDATE accounts a
           SET status = 'available'
         WHERE a.id = $1
+          AND a.status <> 'disabled'
           AND NOT EXISTS (
             SELECT 1
               FROM rentals r
@@ -209,10 +209,10 @@ async function notifyRentalEnded(rental, { client, notifyAdmin, logger }) {
   if (rental.nodeId && client) {
     try {
       await client.sendMessage(rental.nodeId, [
-        '⏰ Время аренды истекло.',
+        '⏰ Your rental has expired.',
         '',
-        `Аккаунт «${rental.title}» больше недоступен.`,
-        'Спасибо за использование сервиса!',
+        `Account "${rental.title}" is no longer available.`,
+        'Thank you for using the service!',
       ].join('\n'));
     } catch (error) {
       logger.error(`Failed to notify buyer ${rental.buyer}: ${error.message}`);
@@ -220,11 +220,9 @@ async function notifyRentalEnded(rental, { client, notifyAdmin, logger }) {
   }
 
   if (notifyAdmin) {
-    await notifyAdmin(
-      `🔒 Аренда #${rental.id} безопасно завершена\n` +
-      `Аккаунт: #${rental.accountId} (${rental.login})\n` +
-      `Покупатель: ${rental.buyer}`
-    );
+      await notifyAdmin(
+      `Rental #${rental.id} ended safely. Account #${rental.accountId} is being prepared for the next rental.`,
+      );
   }
 }
 
@@ -242,7 +240,7 @@ async function deauthorizeRental(rental) {
     throw new Error('Rental is missing sessionid and steamLoginSecure; manual review is required');
   }
 
-  // Deauthorize before VM cleanup so the renter loses Steam access as the first action.
+  // Deauthorize before finalizing the rental so the renter loses Steam access first.
   return deauthorizeAllDevices(cookies.sessionid, cookies.steamLoginSecure);
 }
 
@@ -255,7 +253,7 @@ async function tryAutomaticRenewal(rental, { renewalResolver, logger, notifyAdmi
   } catch (error) {
     logger.error(`Automatic renewal check failed for rental #${rental.id}: ${error.message}`);
     if (notifyAdmin) {
-      await notifyAdmin(`⚠️ Не удалось проверить автопродление аренды #${rental.id}: ${cleanError(error)}`);
+      await notifyAdmin(`⚠️ Failed to check automatic renewal for rental #${rental.id}: ${cleanError(error)}`);
     }
     return false;
   }
@@ -289,7 +287,6 @@ export function createExpiryChecker({
   cleanupLeaseMs = getCleanupLeaseMs(),
   retryInitialMs = getCleanupRetryInitialMs(),
   retryMaxMs = getCleanupRetryMaxMs(),
-  cleanupAgent = createCleanupAgentClient(),
   // Reserved integration point for paid subscriptions/recurring billing.
   // Return { hours, reason } to extend before teardown, or null to end the rental.
   renewalResolver = null,
@@ -306,7 +303,14 @@ export function createExpiryChecker({
 
     try {
       await deauthorizeRental(claimed);
+      await setAccountStatus(claimed.accountId, 'disabled');
       logger.info(`Steam devices deauthorized for rental #${claimed.id}`);
+      if (notifyAdmin) {
+        await notifyAdmin(
+          `Steam sessions were revoked for account #${claimed.accountId}. Update cookies before the next rental.`,
+          { reply_markup: { inline_keyboard: [[{ text: 'Update cookies', callback_data: `acc_update_cookies:${claimed.accountId}` }]] } },
+        );
+      }
     } catch (error) {
       const reason = error?.requiresManualReview
         ? `Manual review required: ${cleanError(error)}`
@@ -318,45 +322,18 @@ export function createExpiryChecker({
       });
       logger.warn(`Steam deauthorization failed for rental #${claimed.id}; retry at ${failure.nextRetryAt.toISOString()}`);
       if (notifyAdmin) {
-        await notifyAdmin(`🚨 Не удалось выкинуть сессии из аренды #${claimed.id}.\n${reason}`);
+        await notifyAdmin(`🚨 Failed to revoke Steam sessions for rental #${claimed.id}.\n${reason}`);
       }
       return 'failed';
     }
 
-    const result = await cleanupAgent.cleanupRental({
-      rentalId: claimed.id,
-      accountId: claimed.accountId,
-      attempt: claimed.cleanupAttempts,
-    });
-
-    if (result.ok) {
-      const ended = await markCleanupSucceeded(claimed.id);
-      if (ended) {
-        logger.info(`Rental #${claimed.id} cleaned up by VM agent and completed`);
-        await notifyRentalEnded(claimed, { client, notifyAdmin, logger });
-        return 'ended';
-      }
-      return 'skipped';
+    const ended = await markCleanupSucceeded(claimed.id);
+    if (ended) {
+      logger.info(`Rental #${claimed.id} ended after Steam session deauthorization`);
+      await notifyRentalEnded(claimed, { client, notifyAdmin, logger });
+      return 'ended';
     }
-
-    const failure = await markCleanupFailed(claimed.id, cleanError(result.error || result.reason), {
-      attempt: claimed.cleanupAttempts,
-      retryInitialMs,
-      retryMaxMs,
-    });
-    logger.warn(
-      `VM cleanup for rental #${claimed.id} failed (${result.reason || 'unknown'}); ` +
-      `retry at ${failure.nextRetryAt.toISOString()}`
-    );
-
-    if (notifyAdmin && (claimed.cleanupAttempts === 1 || claimed.cleanupAttempts % 5 === 0)) {
-      await notifyAdmin(
-        `🚨 Очистка аренды #${claimed.id} не выполнена (попытка ${claimed.cleanupAttempts}).\n` +
-        `Аккаунт #${claimed.accountId} остаётся занятым. Следующая попытка: ${failure.nextRetryAt.toISOString()}.\n` +
-        `Причина: ${cleanError(result.error || result.reason)}`
-      );
-    }
-    return 'failed';
+    return 'skipped';
   }
 
   async function checkOnce() {
@@ -428,7 +405,7 @@ export function createExpiryChecker({
   return { checkOnce, start, stop };
 }
 
-/** Queues a manual early end; the expiry worker still performs the VM cleanup. */
+/** Queues a manual early end; the expiry worker performs Steam cleanup. */
 export async function requestRentalCleanup(rentalId) {
   const result = await query(
     `UPDATE rentals

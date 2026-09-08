@@ -53,14 +53,12 @@ export class SteamRentalCleanup {
                 throw new Error('Required cookies missing (sessionid, steamLoginSecure)');
             }
 
-            // Generate temporary password for account
-            const tempPassword = this._generateTemporaryPassword();
-
             // Execute account recovery
             const recoverer = new SteamAccountRecoverer({
                 login: rental.login,
                 oldPassword: rental.currentPassword, // Must be provided separately or fetched
-                newPassword: tempPassword,
+                newPassword: null,
+                passwordChangeEnabled: false,
                 sharedSecret: mafile.shared_secret,
                 cookies: cookies,
                 timeout: this.timeoutMs,

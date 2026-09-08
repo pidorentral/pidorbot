@@ -1,13 +1,15 @@
 import { Telegraf, Markup } from 'telegraf';
 import { getConfig } from './config.js';
 import { query } from '../src/db.js';
-import { SteamAccountRecoverer, formatSteamError } from '../steam/accountRecoverer.js';
+import { SteamAccountRecoverer, isPasswordChangeEnabled } from '../steam/accountRecoverer.js';
 import {
   addAccount,
   attachMafileToAccount,
+  updateMafileCookies,
   getAccounts,
   getAccountById,
   getActiveRentals,
+  getRentalCleanupHistory,
   getOrders,
   getStats,
   setAccountStatus,
@@ -18,9 +20,11 @@ import {
   listAccountOffers,
   createReview,
   getOrderByFunpayId,
+  getOrderById,
   getPendingReviews,
   getReviewById,
   verifyReview,
+  rejectReview,
   extendActiveRental,
 } from './services/rentalStore.js';
 import { parseMafile } from '../steam/mafile.js';
@@ -203,6 +207,22 @@ function buildRentalExtensionKeyboard(rentalId) {
   ]);
 }
 
+function reviewDecisionKeyboard(reviewId) {
+  return Markup.inlineKeyboard([
+    [
+      Markup.button.callback('Confirm', `review_confirm:${reviewId}`),
+      Markup.button.callback('Reject', `review_reject:${reviewId}`),
+    ],
+    [Markup.button.callback('Back', 'reviews')],
+  ]);
+}
+
+function yesSkipKeyboard(yesAction, skipAction) {
+  return Markup.inlineKeyboard([
+    [Markup.button.callback('Yes', yesAction), Markup.button.callback('Skip', skipAction)],
+  ]);
+}
+
 async function showActiveRentals(ctx) {
   const rentals = await getActiveRentals();
 
@@ -228,6 +248,33 @@ async function showOrders(ctx) {
   ].join('\n'));
 }
 
+async function showCleanupHistory(ctx) {
+  const rentals = await getRentalCleanupHistory();
+  if (!rentals.length) {
+    await answer(ctx, 'Cleanup history is empty.');
+    return;
+  }
+
+  const lines = rentals.map((rental) => [
+    `#${rental.id} · account #${rental.accountId} (${rental.title})`,
+    `Rental status: ${rental.status || 'unknown'}`,
+    `Cleanup: ${formatCleanupStatus(rental)}`,
+    rental.cleanupAttempts ? `Attempts: ${rental.cleanupAttempts}` : null,
+    rental.cleanupNextRetryAt ? `Next retry: ${rental.cleanupNextRetryAt}` : null,
+    rental.cleanupLastError ? `Error: ${rental.cleanupLastError}` : null,
+  ].filter(Boolean).join('\n'));
+
+  await answer(ctx, ['Cleanup history', '', ...lines].join('\n\n'));
+}
+
+function formatCleanupStatus(rental) {
+  if (rental.cleanupStatus === 'failed_permanent') return '🚨 permanently failed';
+  if (rental.cleanupStatus === 'scheduled_retry') return '🔁 retry scheduled';
+  if (rental.cleanupCompletedAt) return '✅ completed';
+  if (rental.cleanupStatus) return rental.cleanupStatus;
+  return '⏳ pending';
+}
+
 async function showSettings(ctx) {
   await answer(ctx, ['Settings', '', 'No configurable settings yet.'].join('\n'));
 }
@@ -238,51 +285,55 @@ async function bindOfferCommand(ctx) {
   const hoursPerLot = Number(hoursRaw);
 
   if (!Number.isSafeInteger(accountId) || accountId < 1 || !/^\d+$/.test(offerId || '') || !Number.isFinite(hoursPerLot) || hoursPerLot <= 0) {
-    return ctx.reply('Использование: /bind_offer <account_id> <funpay_offer_id> <часов_за_лот>');
+    return ctx.reply('Usage: /bind_offer <account_id> <funpay_offer_id> <hours_per_lot>');
   }
 
   const binding = await bindAccountOffer(accountId, offerId, hoursPerLot);
-  return ctx.reply(`Аккаунт #${binding.accountId} привязан к офферу ${binding.offerId}: ${binding.hoursPerLot} ч. за лот.`);
+  return ctx.reply(`Account #${binding.accountId} bound to offer ${binding.offerId}: ${binding.hoursPerLot} hour(s) per lot.`);
 }
 
 async function unbindOfferCommand(ctx) {
   const [, accountIdRaw, offerId] = ctx.message.text.trim().split(/\s+/);
   const accountId = Number(accountIdRaw);
   if (!Number.isSafeInteger(accountId) || accountId < 1 || !/^\d+$/.test(offerId || '')) {
-    return ctx.reply('Использование: /unbind_offer <account_id> <funpay_offer_id>');
+    return ctx.reply('Usage: /unbind_offer <account_id> <funpay_offer_id>');
   }
 
   const binding = await unbindAccountOffer(accountId, offerId);
-  return ctx.reply(binding ? `Привязка #${accountId} → ${offerId} удалена.` : 'Такая привязка не найдена.');
+  return ctx.reply(binding ? `Binding #${accountId} → ${offerId} removed.` : 'Binding not found.');
 }
 
 async function showOffers(ctx) {
   const [, accountIdRaw] = ctx.message.text.trim().split(/\s+/);
   const accountId = accountIdRaw ? Number(accountIdRaw) : null;
   if (accountIdRaw && (!Number.isSafeInteger(accountId) || accountId < 1)) {
-    return ctx.reply('Использование: /offers [account_id]');
+    return ctx.reply('Usage: /offers [account_id]');
   }
 
   const offers = await listAccountOffers(accountId);
-  if (!offers.length) return ctx.reply('Привязок офферов пока нет.');
-  return ctx.reply(offers.map((offer) => `#${offer.accountId} (${offer.accountTitle}) → ${offer.offerId}: ${offer.hoursPerLot} ч./лот`).join('\n'));
+  if (!offers.length) return ctx.reply('No offer bindings yet.');
+  return ctx.reply(offers.map((offer) => `#${offer.accountId} (${offer.accountTitle}) → ${offer.offerId}: ${offer.hoursPerLot} hour(s)/lot`).join('\n'));
 }
 
 export function createBot(config = getConfig()) {
   const bot = new Telegraf(config.botToken);
 
+  bot.catch((error, ctx) => {
+    const description = error?.response?.description || error?.message || '';
+    if (isMessageNotModifiedError(description)) {
+      return;
+    }
+    console.error('Telegram update processing failed', {
+      updateId: ctx?.update?.update_id,
+      callbackData: ctx?.callbackQuery?.data,
+      error,
+    });
+  });
+
   bot.use(adminOnly(config.adminIds));
 
   bot.start(async (ctx) => {
-    await ctx.reply(
-      [
-        'Rental bot is online.',
-        '',
-        'Use /stats to see the current state.',
-        'Use /add_acc to add a temporary account draft.',
-      ].join('\n'),
-      mainMenu(),
-    );
+    await showAdminHome(ctx);
   });
 
   bot.help(async (ctx) => {
@@ -298,6 +349,7 @@ export function createBot(config = getConfig()) {
   bot.command('unbind_offer', unbindOfferCommand);
   bot.command('offers', showOffers);
   bot.command('orders', showOrders);
+  bot.command('cleanup_history', showCleanupHistory);
   bot.command('settings', showSettings);
   bot.command('claim_review', startClaimReview);
   bot.command('reviews', showReviews);
@@ -307,8 +359,18 @@ export function createBot(config = getConfig()) {
 
   bot.action('stats', showStats);
   bot.action('accs', showAccounts);
+  bot.action('accounts_all', (ctx) => showAccounts(ctx, 'all'));
+  bot.action('accounts_available', (ctx) => showAccounts(ctx, 'available'));
+  bot.action('accounts_rented', (ctx) => showAccounts(ctx, 'rented'));
+  bot.action('accounts_needs_cookies', (ctx) => showAccounts(ctx, 'needs_cookies'));
+  bot.action('accounts_disabled', (ctx) => showAccounts(ctx, 'disabled'));
   bot.action('active_rentals', showActiveRentals);
+  bot.action('main_menu', async (ctx) => {
+    return showAdminHome(ctx);
+  });
+  bot.action('add_acc', addAccountCommand);
   bot.action('orders', showOrders);
+  bot.action('cleanup_history', showCleanupHistory);
   bot.action('settings', showSettings);
   bot.action('claim_review', startClaimReview);
   bot.action('reviews', showReviews);
@@ -357,6 +419,7 @@ export function createBot(config = getConfig()) {
       return safeAnswerCb(ctx, 'No active add account flow pizdabol')
     }
 
+    await showTyping(ctx);
     const account = await addAccount({
       title: session.data.title,
       login: session.data.login,
@@ -390,14 +453,14 @@ export function createBot(config = getConfig()) {
     sessions.delete(ctx.from.id);
 
     await safeAnswerCb(ctx);
-    return ctx.editMessageText(`Account #${account.id} added`)
+    return ctx.editMessageText(`Account #${account.id} added`, mainMenu());
   });
 
   bot.action('add_acc_cancel', async (ctx) => {
     sessions.delete(ctx.from.id);
 
     await safeAnswerCb(ctx)
-    return ctx.editMessageText('Account adding canceled')
+    return ctx.editMessageText('Account adding canceled', mainMenu())
   });
 
   // Reviews flow (admin)
@@ -429,7 +492,7 @@ export function createBot(config = getConfig()) {
 
       return ctx.editMessageText(message, mainMenu());
     } catch (err) {
-      return ctx.editMessageText(`Failed to extend rental: ${err.message || err}`, mainMenu());
+      return ctx.editMessageText(uiError('extend rental', err, 'Failed to extend rental. Check the rental status and try again.'), mainMenu());
     }
   });
 
@@ -478,7 +541,8 @@ export function createBot(config = getConfig()) {
     const review = await getReviewById(id);
     if (!review) return ctx.editMessageText('Review not found');
 
-    // perform auto verification
+    // Show progress while the external review verifier is running.
+    await showTyping(ctx);
     const verifier = await import('../src/reviewVerifier.js');
     const result = await verifier.autoVerifyReviewById(review);
 
@@ -488,7 +552,7 @@ export function createBot(config = getConfig()) {
       return ctx.editMessageText(`Auto-verified (confidence=${result.confidence.toFixed(2)}): bonus granted.`, mainMenu());
     }
 
-    return ctx.editMessageText(`Auto-check result: confidence=${result.confidence.toFixed(2)} reason=${result.reason}. Please review manually.`, Markup.inlineKeyboard([[Markup.button.callback('Confirm', `review_confirm:${review.id}`), Markup.button.callback('Reject', `review_reject:${review.id}`), Markup.button.callback('Back', 'reviews')]]));
+    return ctx.editMessageText(`Auto-check result: confidence=${result.confidence.toFixed(2)} reason=${result.reason}. Please review manually.`, reviewDecisionKeyboard(review.id));
   });
 
   bot.action(/^review_confirm:(\d+)$/, async (ctx) => {
@@ -498,7 +562,7 @@ export function createBot(config = getConfig()) {
       const res = await verifyReview(id, 'admin');
       return ctx.editMessageText(`Review #${id} verified. Rental extended.${res.rental ? ' Rental ID: ' + res.rental.id : ''}`, mainMenu());
     } catch (err) {
-      return ctx.editMessageText(`Failed to verify: ${err.message || err}`, mainMenu());
+      return ctx.editMessageText(uiError('verify review', err, 'Failed to verify review. Please try again.'), mainMenu());
     }
   });
 
@@ -509,7 +573,7 @@ export function createBot(config = getConfig()) {
       await rejectReview(id, 'admin', 'rejected by admin');
       return ctx.editMessageText(`Review #${id} rejected.`, mainMenu());
     } catch (err) {
-      return ctx.editMessageText(`Failed to reject: ${err.message || err}`, mainMenu());
+      return ctx.editMessageText(uiError('reject review', err, 'Failed to reject review. Please try again.'), mainMenu());
     }
   });
 
@@ -554,17 +618,16 @@ export function createBot(config = getConfig()) {
           try {
             await ctx.telegram.sendMessage(id, msg, keyboard);
           } catch (e) {
-            // ignore send failures to individual admins
+            console.error(`[telegram] failed to notify admin #${id}`, e);
           }
         }
       } catch (e) {
-        // don't fail user flow on notify errors
+        console.error('[telegram] failed to prepare review notification', e);
       }
 
       return ctx.editMessageText('Review submitted. Admins will review and grant bonus if valid.', mainMenu());
     } catch (err) {
-      console.error('createReview failed', err);
-      return ctx.editMessageText('Failed to submit review: ' + (err.message || err), mainMenu());
+      return ctx.editMessageText(uiError('create review', err, 'Failed to submit review. Please try again.'), mainMenu());
     }
   });
 
@@ -584,13 +647,65 @@ export function createBot(config = getConfig()) {
     }
 
     await safeAnswerCb(ctx);
+    const uiAccount = await getAccountUiModel(account);
 
     return ctx.editMessageText(
-      formatAccountCard(account),
-      accountCardKeyboard(account),
+      formatAccountCard(uiAccount),
+      accountCardKeyboard(uiAccount),
     );
     }
   );
+
+  bot.action(/^acc_offers:(\d+)$/, async (ctx) => {
+    const accountId = Number(ctx.match[1]);
+    const account = await getAccountById(accountId);
+    if (!account) {
+      await safeAnswerCb(ctx, 'Account not found.');
+      return;
+    }
+
+    const offers = await listAccountOffers(accountId);
+    await safeAnswerCb(ctx);
+    return ctx.editMessageText(formatAccountOffers(account, offers), accountOffersKeyboard(accountId, offers));
+  });
+
+  bot.action(/^acc_offer_add:(\d+)$/, async (ctx) => {
+    const accountId = Number(ctx.match[1]);
+    const account = await getAccountById(accountId);
+    if (!account) {
+      await safeAnswerCb(ctx, 'Account not found.');
+      return;
+    }
+
+    sessions.set(ctx.from.id, { flow: 'bind_offer_ui', step: 'binding', accountId });
+    await safeAnswerCb(ctx);
+    return ctx.reply('Send offer ID and hours per lot, for example: 123456 2');
+  });
+
+  bot.action(/^acc_offer_unbind:(\d+):(\d+)$/, async (ctx) => {
+    const accountId = Number(ctx.match[1]);
+    const offerId = ctx.match[2];
+    await safeAnswerCb(ctx);
+    return ctx.editMessageText(
+      `Unbind offer ${offerId} from account #${accountId}?`,
+      Markup.inlineKeyboard([
+        [
+          Markup.button.callback('Confirm', `acc_offer_unbind_confirm:${accountId}:${offerId}`),
+          Markup.button.callback('Cancel', `acc_offers:${accountId}`),
+        ],
+      ]),
+    );
+  });
+
+  bot.action(/^acc_offer_unbind_confirm:(\d+):(\d+)$/, async (ctx) => {
+    const accountId = Number(ctx.match[1]);
+    const offerId = ctx.match[2];
+    await safeAnswerCb(ctx);
+    await unbindAccountOffer(accountId, offerId);
+    const account = await getAccountById(accountId);
+    const offers = await listAccountOffers(accountId);
+    return ctx.editMessageText(formatAccountOffers(account, offers), accountOffersKeyboard(accountId, offers));
+  });
 
   bot.action(/^acc_password:(\d+)$/, async (ctx) => {
     const accountId = Number(ctx.match[1]);
@@ -601,30 +716,12 @@ export function createBot(config = getConfig()) {
       return ctx.editMessageText('Account not found.');
     }
 
-    console.log(`Admin ${ctx.from.id} viewed password for account #${account.id}`);
-
+    const uiAccount = await getAccountUiModel(account);
     const currentMessageText = ctx.update?.callback_query?.message?.text;
-    const targetText = formatAccountCard(account, { showPassword: true });
-    if (currentMessageText === targetText) {
-      await safeAnswerCb(ctx);
-      return;
-    }
-
-    await safeAnswerCb(ctx);
-
-    try {
-      return ctx.editMessageText(
-        targetText,
-        accountCardKeyboard(account),
-      );
-    } catch (err) {
-      // Ignore message-not-modified and other edit failures for duplicate presses
-      const desc = err?.response?.description || err?.message || '';
-      if (typeof desc === 'string' && desc.includes('Message is not modified')) {
-        return;
-      }
-      throw err;
-    }
+    const targetText = formatAccountCard(uiAccount);
+    await safeAnswerCb(ctx, 'Passwords are hidden for security.');
+    if (currentMessageText === targetText) return;
+    return ctx.editMessageText(targetText, accountCardKeyboard(uiAccount));
   });
 
   bot.action(/^acc_test_recovery:(\d+)$/, async (ctx) => {
@@ -637,14 +734,16 @@ export function createBot(config = getConfig()) {
     }
 
     await safeAnswerCb(ctx, 'Starting recovery test...');
+    await showTyping(ctx);
 
     const result = await runRecoverySmokeTest(accountId);
+    const updatedAccount = await getAccountUiModel(await getAccountById(accountId, { includeSecrets: true }));
     const currentMessageText = ctx.update?.callback_query?.message?.text;
     if (currentMessageText === result.message) {
       return;
     }
     try {
-      return ctx.editMessageText(result.message, accountCardKeyboard(account));
+      return ctx.editMessageText(result.message, accountCardKeyboard(updatedAccount || account));
     } catch (err) {
       const desc = err?.response?.description || err?.message || '';
       if (typeof desc === 'string' && desc.includes('Message is not modified')) {
@@ -652,6 +751,50 @@ export function createBot(config = getConfig()) {
       }
       throw err;
     }
+  });
+
+  bot.action(/^acc_update_cookies:(\d+)$/, async (ctx) => {
+    const accountId = Number(ctx.match[1]);
+    const account = await getAccountById(accountId);
+    if (!account) {
+      await safeAnswerCb(ctx, 'Account not found.');
+      return;
+    }
+
+    await safeAnswerCb(ctx);
+    return ctx.editMessageText(
+      `Update cookies for account #${accountId}: choose an input format.`,
+      Markup.inlineKeyboard([
+        [
+          Markup.button.callback('Paste JSON', `acc_update_cookies_json:${accountId}`),
+          Markup.button.callback('Paste cookie header', `acc_update_cookies_header:${accountId}`),
+        ],
+        [Markup.button.callback('Cancel', `acc_open:${accountId}`)],
+      ]),
+    );
+  });
+
+  for (const mode of ['json', 'header']) {
+    bot.action(new RegExp(`^acc_update_cookies_${mode}:(\\d+)$`), async (ctx) => {
+      const accountId = Number(ctx.match[1]);
+      sessions.set(ctx.from.id, { flow: 'update_cookies', step: 'cookies', mode, accountId });
+      await safeAnswerCb(ctx);
+      const prompt = mode === 'json'
+        ? 'Paste Steam cookies as JSON:'
+        : 'Paste the cookie header in the format name=value; name2=value2:';
+      return ctx.editMessageText(prompt, Markup.inlineKeyboard([
+        [Markup.button.callback('Cancel', `acc_update_cookies_cancel:${accountId}`)],
+      ]));
+    });
+  }
+
+  bot.action(/^acc_update_cookies_cancel:(\d+)$/, async (ctx) => {
+    const accountId = Number(ctx.match[1]);
+    sessions.delete(ctx.from.id);
+    await safeAnswerCb(ctx);
+    const account = await getAccountById(accountId, { includeSecrets: true });
+    const uiAccount = await getAccountUiModel(account);
+    return ctx.editMessageText(formatAccountCard(uiAccount), accountCardKeyboard(uiAccount));
   });
 
   // Disable / enable flow: ask for confirmation
@@ -687,6 +830,10 @@ export function createBot(config = getConfig()) {
   bot.action(/^acc_enable_confirm:(\d+)$/, async (ctx) => {
     const accountId = Number(ctx.match[1]);
     await safeAnswerCb(ctx);
+    const cookies = await readStoredMafileCookies(accountId);
+    if (!cookies?.sessionid || !cookies?.steamLoginSecure) {
+      return ctx.reply('Account remains disabled until fresh Steam cookies are updated.');
+    }
     await setAccountStatus(accountId, 'available');
     const account = await getAccountById(accountId, { includeSecrets: true });
     return ctx.editMessageText(
@@ -720,15 +867,19 @@ export function createBot(config = getConfig()) {
     const accountId = Number(ctx.match[1]);
     await safeAnswerCb(ctx);
     try {
+      await showTyping(ctx);
       await deleteAccount(accountId);
       return ctx.editMessageText(`Account #${accountId} deleted.`, mainMenu());
     } catch (err) {
       // If delete failed due to existing rentals, show friendly message and the account card
-      console.error('deleteAccount failed', err?.message || err);
       const account = await getAccountById(accountId, { includeSecrets: true }).catch(() => null);
-      const message = err?.message && typeof err.message === 'string' && err.message.includes('referenced by rentals')
-        ? `Cannot delete account: it is referenced by active or historical rentals. End or remove rentals first. (${err.message})`
-        : `Failed to delete account: ${err?.message || 'unknown error'}`;
+      const isReferencedByRentals = typeof err?.message === 'string' && err.message.includes('referenced by rentals');
+      const message = isReferencedByRentals
+        ? 'Cannot delete account: it is referenced by active or historical rentals. End or remove rentals first.'
+        : uiError('delete account', err, 'Failed to delete account. Please try again.');
+      if (isReferencedByRentals) {
+        uiError('delete account with rentals', err);
+      }
 
       if (account) {
         await safeAnswerCb(ctx);
@@ -789,7 +940,7 @@ export function createBot(config = getConfig()) {
   bot.action('edit_acc_cancel', async (ctx) => {
     await safeAnswerCb(ctx);
     sessions.delete(ctx.from.id);
-    return ctx.reply('Edit cancelled.');
+    return ctx.reply('Edit cancelled.', mainMenu());
   });
 
   bot.action('add_acc_mafile_yes', async (ctx) => {
@@ -815,9 +966,7 @@ export function createBot(config = getConfig()) {
     session.step = 'cookies_choice';
 
     await safeAnswerCb(ctx);
-    return ctx.editMessageText('Attach active Steam cookies now?', Markup.inlineKeyboard([
-      [Markup.button.callback('Yes', 'add_acc_cookies_yes'), Markup.button.callback('Skip', 'add_acc_cookies_skip')],
-    ]));
+    return ctx.editMessageText('Attach active Steam cookies now?', yesSkipKeyboard('add_acc_cookies_yes', 'add_acc_cookies_skip'));
   });
 
   bot.action('add_acc_cookies_yes', async (ctx) => {
@@ -853,6 +1002,49 @@ export function createBot(config = getConfig()) {
       return continueAddAccount(ctx, session);
     }
 
+    if (session?.flow === 'update_cookies') {
+      const cookies = parseSteamCookiesInput(ctx.message?.text?.trim());
+      if (!cookies?.sessionid || !cookies?.steamLoginSecure) {
+        return ctx.reply('Invalid cookies. Both sessionid and steamLoginSecure are required.');
+      }
+
+      try {
+        await showTyping(ctx);
+        await updateMafileCookies(session.accountId, cookies);
+        await setAccountStatus(session.accountId, 'available');
+        sessions.delete(ctx.from.id);
+        const updatedAccount = await getAccountUiModel(await getAccountById(session.accountId));
+        return ctx.reply([
+          '✅ Cookies updated',
+          `sessionid: ${cookies.sessionid ? 'present' : 'missing'}`,
+          `steamLoginSecure: ${cookies.steamLoginSecure ? 'present' : 'missing'}`,
+          `steamMachineAuth: ${cookies.steamMachineAuth ? 'present' : 'missing'}`,
+          '',
+          'Account enabled.',
+        ].join('\n'), accountCardKeyboard(updatedAccount));
+      } catch (err) {
+        return ctx.reply(uiError('update cookies', err, 'Failed to update cookies. Please check the values and try again.'));
+      }
+    }
+
+    if (session?.flow === 'bind_offer_ui') {
+      const [offerId, hoursRaw] = String(ctx.message?.text || '').trim().split(/\s+/);
+      const hoursPerLot = Number(hoursRaw);
+      if (!/^\d+$/.test(offerId || '') || !Number.isFinite(hoursPerLot) || hoursPerLot <= 0) {
+        return ctx.reply('Invalid input. Send: <offer_id> <hours_per_lot>, for example: 123456 2');
+      }
+
+      try {
+        await bindAccountOffer(session.accountId, offerId, hoursPerLot);
+        sessions.delete(ctx.from.id);
+        const account = await getAccountById(session.accountId);
+        const offers = await listAccountOffers(session.accountId);
+        return ctx.reply(formatAccountOffers(account, offers), accountOffersKeyboard(session.accountId, offers));
+      } catch (err) {
+        return ctx.reply(uiError('bind offer', err, 'Failed to bind offer. Check the offer ID and hours, then try again.'));
+      }
+    }
+
     if (session?.flow === 'extend_rental') {
       const raw = ctx.message?.text?.trim();
       if (!raw) return ctx.reply('Send extension hours value.');
@@ -866,7 +1058,7 @@ export function createBot(config = getConfig()) {
       try {
         const result = await extendActiveRental(rentalId, hours, { reason: 'telegram-admin' });
         const rental = await getActiveRentals().then((items) => items.find((it) => Number(it.id) === Number(result.rentalId)) || null);
-        const notifyText = `⏳ Администратор продлил аренду на ${result.hours} час(а). Новое время окончания: ${new Date(result.newEndsAt).toISOString()}`;
+        const notifyText = `⏳ An administrator extended your rental by ${result.hours} hour(s). New end time: ${new Date(result.newEndsAt).toISOString()}`;
 
         if (rental?.buyer && process.env.FUNPAY_GOLDEN_KEY) {
           try {
@@ -885,9 +1077,9 @@ export function createBot(config = getConfig()) {
           `Rental #${result.rentalId} extended by ${result.hours} hour(s).`,
           `New end: ${new Date(result.newEndsAt).toISOString()}`,
           rental?.buyer ? `Buyer: ${rental.buyer}` : null,
-        ].filter(Boolean).join('\n'));
+        ].filter(Boolean).join('\n'), mainMenu());
       } catch (err) {
-        return ctx.reply(`Failed to extend rental: ${err.message || err}`);
+        return ctx.reply(uiError('extend rental from text flow', err, 'Failed to extend rental. Check the rental status and try again.'));
       }
     }
 
@@ -947,13 +1139,13 @@ async function syncBotCommands(bot) {
   try {
     await bot.telegram.setMyCommands(COMMANDS, { scope: { type: 'default' } });
   } catch (err) {
-    console.error('❌ Ошибка обновления команд:', err);
+    console.error('❌ Failed to update bot commands:', err);
   }
 
   // try {
   //   await bot.telegram.setChatMenuButton({ menuButton: { type: 'commands' } });
   // } catch (err) {
-  //   console.error('❌ Ошибка кнопки меню:', err);
+  //   console.error('❌ Failed to update chat menu button:', err);
   // }
 }
 
@@ -1015,6 +1207,25 @@ async function safeAnswerCb(ctx, ...args) {
   }
 }
 
+function isMessageNotModifiedError(description) {
+  return typeof description === 'string'
+    && description.toLowerCase().includes('message is not modified');
+}
+
+function uiError(context, error, fallback = 'Operation failed. Please try again.') {
+  console.error(`[telegram] ${context}`, error);
+  return fallback;
+}
+
+// Sends Telegram's typing status without allowing a notification failure to break the UI flow.
+async function showTyping(ctx) {
+  try {
+    await ctx.sendChatAction('typing');
+  } catch (err) {
+    console.warn('[telegram] failed to send typing status', err);
+  }
+}
+
 // /stats
 
 async function runRecoverySmokeTest(accountId) {
@@ -1065,11 +1276,16 @@ async function runRecoverySmokeTest(accountId) {
 
   try {
     await recoverer.executeRecovery();
+    await setAccountStatus(account.id, 'disabled');
+    const passwordChanged = isPasswordChangeEnabled();
     return {
       ok: true,
       message: [
         `Recovery test completed for account #${account.id}.`,
-        `Temporary password: ${tempPassword}`,
+        passwordChanged
+          ? 'Temporary password was generated and is not displayed in Telegram.'
+          : 'Steam password was not changed. Device sessions were deauthorized only.',
+        'Account status: disabled until fresh cookies are updated.',
         'Result: success',
       ].join('\n'),
     };
@@ -1078,10 +1294,40 @@ async function runRecoverySmokeTest(accountId) {
       ok: false,
       message: [
         `Recovery test failed for account #${account.id}.`,
-        `Error: ${formatSteamError(err)}`,
+        uiError('recovery test', err, 'Steam recovery failed. Check the account cookies and server logs.'),
       ].join('\n'),
     };
   }
+}
+
+async function readStoredMafileCookies(accountId) {
+  try {
+    const result = await query(
+      `SELECT raw_json AS "rawJson" FROM mafiles WHERE account_id = $1 LIMIT 1`,
+      [accountId],
+    );
+    return extractSteamCookiesFromMafile(result.rows[0]?.rawJson);
+  } catch {
+    return null;
+  }
+}
+
+async function getAccountUiModel(account) {
+  if (!account) return null;
+
+  const cookies = await readStoredMafileCookies(account.id);
+  const offers = await listAccountOffers(account.id);
+  const hasRequiredCookies = Boolean(cookies?.sessionid && cookies?.steamLoginSecure);
+
+  return {
+    ...account,
+    cookieStatus: account.status === 'disabled'
+      ? '⚠️ needs update'
+      : hasRequiredCookies
+        ? '✅ up to date'
+        : '⚠️ needs update',
+    offerBindingCount: offers.length,
+  };
 }
 
 async function recoverTestCommand(ctx) {
@@ -1092,6 +1338,7 @@ async function recoverTestCommand(ctx) {
     return ctx.reply('Usage: /recover_test <account_id>');
   }
 
+  await showTyping(ctx);
   const result = await runRecoverySmokeTest(accountId);
   return ctx.reply(result.message);
 }
@@ -1112,33 +1359,69 @@ async function showStats(ctx) {
 
 // /accs
 
-async function showAccounts(ctx) {
-  const accounts = await getAccounts();
+async function showAdminHome(ctx) {
+  const stats = await getStats();
+  return answer(ctx, [
+    'Admin panel',
+    '',
+    `Accounts: ${stats.totalAccounts}`,
+    `🟢 Available: ${stats.available}`,
+    `🟡 Rented: ${stats.rented}`,
+    `Active rentals: ${stats.activeRentals}`,
+    `New orders: ${stats.newOrders}`,
+  ].join('\n'), mainMenu());
+}
 
-  if (accounts.length === 0) {
-    await answer(ctx, 'No accounts yet. Add one with:\n/add_acc');
+async function showAccounts(ctx, filter = 'all') {
+  const rawAccounts = await getAccounts();
+  const accounts = filter === 'all'
+    ? rawAccounts
+    : await Promise.all(rawAccounts.map((account) => getAccountUiModel(account)));
+  const filteredAccounts = filterAccounts(accounts, filter);
+
+  if (filteredAccounts.length === 0) {
+    await answer(ctx, filter === 'all' ? 'No accounts yet. Add one with /add_acc.' : 'No accounts match this filter.', accountFiltersKeyboard(filter));
     return;
   }
 
   return answer(
     ctx,
-    formatAccountsList(accounts),
-    accountsListKeyboard(accounts),
+    formatAccountsList(filteredAccounts),
+    accountsListKeyboard(filteredAccounts, filter),
   );
 }
 
-function formatAccountCard(account, options = {}) {
-  const password = options.showPassword ? account.password : '********';
+function filterAccounts(accounts, filter) {
+  if (filter === 'needs_cookies') {
+    return accounts.filter((account) => account.cookieStatus === '⚠️ needs update');
+  }
+  if (filter === 'all') return accounts;
+  return accounts.filter((account) => account.status === filter);
+}
+
+export function formatAccountCard(account) {
+  const status = account.status === 'available'
+    ? '🟢 available'
+    : account.status === 'rented'
+      ? '🟡 rented'
+      : account.status === 'disabled'
+        ? '🔴 disabled'
+        : `⚪ ${account.status}`;
 
   return [
     `Account #${account.id}`,
     '',
     `Title: ${account.title}`,
     `Login: ${account.login}`,
-    `Password: ${password}`,
-    `Status: ${account.status}`,
+    'Password: *** (hidden)',
+    `Status: ${status}`,
+    account.status === 'disabled'
+      ? 'Disabled reason: Steam sessions revoked. Cookies update required.'
+      : null,
+    `Cookies: ${account.cookieStatus || '⚠️ needs update'}`,
     `Steam Guard: ${account.sharedSecret || account.steamId ? 'connected' : 'not connected'}`,
-  ].join('\n');
+    `Offer bindings: ${account.offerBindingCount ?? 0}`,
+  ].filter(Boolean).join('\n');
 }
 
 function formatAccountsList(accounts) {
@@ -1146,13 +1429,20 @@ function formatAccountsList(accounts) {
     'Accounts:',
     '',
     ...accounts.map((account) => (
-      `#${account.id} ${account.title}\nStatus: ${account.status}`
+      `#${account.id} ${account.title}\nStatus: ${formatAccountStatus(account.status)}`
     )),
   ].join('\n\n')
 }
 
+function formatAccountStatus(status) {
+  if (status === 'available') return '🟢 available';
+  if (status === 'rented') return '🟡 rented';
+  if (status === 'disabled') return '🔴 disabled';
+  return `⚪ ${status}`;
+}
+
 function accountCardKeyboard(account) {
-  const firstRow = [Markup.button.callback('Show password', `acc_password:${account.id}`)];
+  const firstRow = [];
   const hasSteamSecrets = Boolean(
     account.sharedSecret || account.identitySecret || account.mafileId || account.steamId
   );
@@ -1169,7 +1459,11 @@ function accountCardKeyboard(account) {
   return Markup.inlineKeyboard([
     firstRow,
     [
+      Markup.button.callback('Manage offers', `acc_offers:${account.id}`),
+    ],
+    [
       ...(canTestRecovery ? [Markup.button.callback('Test recovery', `acc_test_recovery:${account.id}`)] : []),
+      ...(account.status === 'disabled' ? [Markup.button.callback('Update cookies', `acc_update_cookies:${account.id}`)] : []),
       Markup.button.callback(disableButtonLabel, `acc_disable:${account.id}`),
     ],
     [
@@ -1179,6 +1473,31 @@ function accountCardKeyboard(account) {
     [
       Markup.button.callback('Back', 'accs_back'),
     ],
+  ]);
+}
+
+function formatAccountOffers(account, offers) {
+  const availability = account.status === 'available'
+    ? '🟢 Available for rental'
+    : account.status === 'rented'
+      ? '🟡 Currently rented'
+      : '🔴 Not available for rental';
+
+  return [
+    `Offers for account #${account.id}`,
+    `Status: ${availability}`,
+    '',
+    ...(offers.length
+      ? offers.map((offer) => `${offer.offerId}: ${offer.hoursPerLot} hour(s)/lot`)
+      : ['No offer bindings.']),
+  ].join('\n');
+}
+
+function accountOffersKeyboard(accountId, offers) {
+  return Markup.inlineKeyboard([
+    [Markup.button.callback('Add offer', `acc_offer_add:${accountId}`)],
+    ...offers.map((offer) => [Markup.button.callback(`Unbind ${offer.offerId}`, `acc_offer_unbind:${accountId}:${offer.offerId}`)]),
+    [Markup.button.callback('Back to account', `acc_open:${accountId}`)],
   ]);
 }
 
@@ -1192,7 +1511,21 @@ function confirmKeyboard(actionPrefix, id) {
   ]);
 }
 
-function accountsListKeyboard(accounts) {
+function accountFiltersKeyboard(activeFilter = 'all') {
+  const label = (text, filter) => Markup.button.callback(
+    filter === activeFilter ? `• ${text}` : text,
+    `accounts_${filter}`,
+  );
+
+  return Markup.inlineKeyboard([
+    [label('All', 'all'), label('Available', 'available')],
+    [label('Rented', 'rented'), label('Needs cookies', 'needs_cookies')],
+    [label('Disabled', 'disabled')],
+    [Markup.button.callback('Main menu', 'main_menu')],
+  ]);
+}
+
+function accountsListKeyboard(accounts, activeFilter = 'all') {
   return Markup.inlineKeyboard([
     ...accounts.map((account) => [
       Markup.button.callback(
@@ -1200,6 +1533,7 @@ function accountsListKeyboard(accounts) {
         `acc_open:${account.id}`,
       ),
     ]),
+    ...accountFiltersKeyboard(activeFilter).reply_markup.inline_keyboard,
   ]);
 }
 
@@ -1273,9 +1607,7 @@ async function continueAddAccount(ctx, session) {
         session.step = 'mafile_choice';
         return ctx.reply(
           'Attach mafile now?',
-          Markup.inlineKeyboard([
-            [Markup.button.callback('Yes', 'add_acc_mafile_yes'), Markup.button.callback('Skip', 'add_acc_mafile_skip')],
-          ]),
+          yesSkipKeyboard('add_acc_mafile_yes', 'add_acc_mafile_skip'),
         );
 
       case 'mafile':
@@ -1292,11 +1624,9 @@ async function continueAddAccount(ctx, session) {
           }
 
           session.step = 'cookies_choice';
-          return ctx.reply('Attach active Steam cookies now?', Markup.inlineKeyboard([
-            [Markup.button.callback('Yes', 'add_acc_cookies_yes'), Markup.button.callback('Skip', 'add_acc_cookies_skip')],
-          ]));
+          return ctx.reply('Attach active Steam cookies now?', yesSkipKeyboard('add_acc_cookies_yes', 'add_acc_cookies_skip'));
         } catch (err) {
-          return ctx.reply(`Error parsing mafile: ${err.message}`);
+          return ctx.reply(uiError('parse mafile during add account', err, 'Invalid mafile. Check the JSON and send it again.'));
         }
 
       case 'cookies': {
@@ -1326,10 +1656,10 @@ async function continueAddAccount(ctx, session) {
         rawJson: mafileData.raw,
       });
       sessions.delete(ctx.from.id);
-      await ctx.reply('Mafile attached successfully.');
+      await ctx.reply('Mafile attached successfully.', mainMenu());
       return;
     } catch (err) {
-      return ctx.reply(`Error parsing mafile: ${err.message}`);
+      return ctx.reply(uiError('parse mafile during attach', err, 'Invalid mafile. Check the JSON and send it again.'));
     }
   }
 
@@ -1376,6 +1706,11 @@ function mainMenu() {
       Markup.button.callback('Rentals', 'active_rentals'),
       Markup.button.callback('Orders', 'orders'),
     ],
+    [
+      Markup.button.callback('Reviews', 'reviews'),
+      Markup.button.callback('Add account', 'add_acc'),
+    ],
+    [Markup.button.callback('Cleanup history', 'cleanup_history')],
     [Markup.button.callback('Settings', 'settings')],
   ]);
 }
@@ -1385,11 +1720,18 @@ function formatHelp() {
     'Available commands:',
     '',
     '/stats - summary',
+    '/reviews - pending review claims',
     '/accs - accounts list',
     '/active_rentals - active rentals',
     '/add_acc - add an account',
+    '/recover_test - run Steam recovery test',
+    '/bind_offer - bind an account offer',
+    '/unbind_offer - remove an account offer',
+    '/offers - list offer bindings',
     '/orders - orders list',
+    '/cleanup_history - cleanup history',
     '/settings - bot settings',
+    '/claim_review - claim review bonus',
   ].join('\n');
 }
 
@@ -1400,7 +1742,14 @@ function getMessageText(ctx) {
 async function answer(ctx, text, keyboard = mainMenu()) {
   if (ctx.callbackQuery) {
     await safeAnswerCb(ctx);
-    await ctx.editMessageText(text, keyboard);
+    try {
+      await ctx.editMessageText(text, keyboard);
+    } catch (error) {
+      const description = error?.response?.description || error?.message || '';
+      if (!isMessageNotModifiedError(description)) {
+        throw error;
+      }
+    }
     return;
   }
 

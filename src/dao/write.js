@@ -82,6 +82,42 @@ export async function attachMafileToAccount(accountId, { sharedSecret, identityS
   }
 }
 
+export async function updateMafileCookies(accountId, cookies) {
+  const existing = await query(
+    `SELECT raw_json AS "rawJson"
+       FROM mafiles
+      WHERE account_id = $1
+      LIMIT 1`,
+    [accountId]
+  );
+
+  if (!existing.rows.length) {
+    throw new Error('Mafile not found for account');
+  }
+
+  let mafile = {};
+  const rawJson = existing.rows[0].rawJson;
+  if (rawJson) {
+    try {
+      mafile = JSON.parse(crypto.decrypt(rawJson));
+    } catch {
+      throw new Error('Stored mafile payload cannot be decrypted');
+    }
+  }
+
+  const encryptedPayload = JSON.stringify(crypto.encrypt(JSON.stringify({ ...mafile, cookies })));
+  const result = await query(
+    `UPDATE mafiles
+        SET raw_json = $1::jsonb,
+            updated_at = NOW()
+      WHERE account_id = $2
+      RETURNING id`,
+    [encryptedPayload, accountId]
+  );
+
+  return { accountId, mafileId: result.rows[0].id };
+}
+
 function parseMmrFromText(text = '') {
   const normalized = String(text || '').toLowerCase().replace(/\u00A0/g, ' ');
   const match = normalized.match(/(\d[\d\s]*(?:[.,]\d+)?)\s*(k|к)?\b/);
@@ -396,9 +432,8 @@ export async function completeRental(rentalId) {
       throw new Error('Rental is not active');
     }
 
-    // Do not release the account here. The expiry worker must first terminate
-    // the VM session and confirm cleanup; otherwise a new buyer could receive
-    // an account which is still in use by the previous renter.
+    // Do not release the account here. The expiry worker must revoke Steam sessions
+    // and keep the account disabled until fresh cookies are saved.
     await client.query(
       `UPDATE rentals
           SET ends_at = NOW(),

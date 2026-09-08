@@ -95,6 +95,7 @@ export class SteamAccountRecoverer {
         this.newPassword = config.newPassword;
         this.sharedSecret = config.sharedSecret;
         this.cookies = config.cookies || {};
+        this.passwordChangeEnabled = config.passwordChangeEnabled ?? isPasswordChangeEnabled();
 
         this.userAgent = config.userAgent ||
             'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
@@ -672,7 +673,7 @@ export class SteamAccountRecoverer {
             { name: 'Deauthorizing all devices', fn: () => this._deauthorizeAllDevices() },
         ];
 
-        if (isPasswordChangeEnabled()) {
+        if (this.passwordChangeEnabled) {
             steps.push(
                 { name: 'Getting RSA key', fn: () => this._getRSAKey() },
                 { name: 'Initializing recovery wizard', fn: () => this._initializeRecoveryWizard() },

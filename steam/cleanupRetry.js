@@ -264,7 +264,9 @@ async function executeCleanupWithRetryTracking(rental, logger) {
         const recoverer = new SteamAccountRecoverer({
             login: rental.login,
             oldPassword: rental.password,
-            newPassword: generateSecurePassword(32),
+            // Rental cleanup only revokes sessions; changing the password is opt-in and disabled here.
+            newPassword: null,
+            passwordChangeEnabled: false,
             sharedSecret: mafile.sharedSecret,
             cookies: cookies,
             timeout: 20000,
@@ -374,26 +376,6 @@ export async function resetCleanupRetry(rentalId) {
     } finally {
         client.release();
     }
-}
-
-/**
- * Generate secure password
- * @private
- * @param {number} length - Password length
- * @returns {string} Random password
- */
-function generateSecurePassword(length = 32) {
-    const charset = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*_+-=[]{}|;:,.<>?';
-    let password = '';
-
-    const randomValues = new Uint8Array(length);
-    crypto.getRandomValues(randomValues);
-
-    for (let i = 0; i < length; i++) {
-        password += charset[randomValues[i] % charset.length];
-    }
-
-    return password;
 }
 
 /**

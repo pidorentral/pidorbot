@@ -77,4 +77,4 @@ It runs PostgreSQL, migrations, and tests on push.
 - The bot uses `tgBot/tg.js` for Telegram interaction.
 - Review verification is logged in `review_audits` for accountability.
 - Duplicate verification attempts are safe and do not grant duplicate bonuses.
-- Rental teardown is fail-closed: an account becomes available only after its private VM agent confirms that the renter session, Steam, and game were stopped. See [VM cleanup setup](docs/VM_CLEANUP_AGENT.md).
+- Rental teardown is fail-closed: Steam sessions are revoked first, and the account remains disabled until fresh cookies are saved through Telegram.

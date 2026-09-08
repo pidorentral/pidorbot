@@ -2,6 +2,12 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import * as writeDao from '../src/dao/write.js';
 import { getClient } from '../src/db.js';
+import * as rentalStore from '../tgBot/services/rentalStore.js';
+
+test('rental store exposes review callback dependencies', () => {
+  assert.equal(typeof rentalStore.getOrderById, 'function');
+  assert.equal(typeof rentalStore.rejectReview, 'function');
+});
 
 if (!process.env.DATABASE_URL) {
   test('skip reviewAudit tests without DATABASE_URL', () => {});

@@ -383,6 +383,23 @@ test('SteamAccountRecoverer - deauthorizes first and skips password change by de
     }
 });
 
+test('SteamAccountRecoverer - cleanup can explicitly disable password change', async () => {
+    const recoverer = new SteamAccountRecoverer({
+        login: 'testuser',
+        oldPassword: 'old123',
+        newPassword: 'must-not-be-used',
+        passwordChangeEnabled: false,
+        sharedSecret: 'JBSWY3DPEBLW64TMMQ======',
+        cookies: { sessionid: 'session', steamLoginSecure: 'secure' },
+    });
+    const calls = [];
+    recoverer._deauthorizeAllDevices = async () => calls.push('deauthorize');
+    recoverer._setNewPassword = async () => calls.push('password');
+
+    await recoverer.executeRecovery();
+    assert.deepEqual(calls, ['deauthorize']);
+});
+
 /**
  * Test: Convenience function
  */

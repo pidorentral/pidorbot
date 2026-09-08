@@ -42,9 +42,13 @@ async function main() {
   process.once('SIGTERM', () => void shutdown('SIGTERM'));
   
   const adminIds = (process.env.TG_ADMIN_IDS || '').split(',').map(Number).filter(Boolean);
-  const notifyAdmin = async (text) => {
+  const notifyAdmin = async (text, extra = undefined) => {
     for (const id of adminIds) {
-      await bot.telegram.sendMessage(id, text).catch(() => {});
+      try {
+        await bot.telegram.sendMessage(id, text, extra);
+      } catch (err) {
+        logger.error(`Failed to notify Telegram admin #${id}`, err);
+      }
     }
   };
 

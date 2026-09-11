@@ -137,6 +137,33 @@ test('parses lot id from order link', () => {
   }]);
 });
 
+test('parses lot id from lots/offer?id= URL format', () => {
+  const html = `
+    <div class="tc-item info">
+      <div class="tc-order">#LLWUVCSD</div>
+      <a href="https://funpay.com/lots/offer?id=73721885"></a>
+      <div class="media-user-name">buyer_name</div>
+      <div class="tc-price">1 200 ₽</div>
+      <div class="tc-status">Paid</div>
+      <div class="order-desc">Steam account</div>
+      <div class="tc-date-time">today</div>
+    </div>
+  `;
+
+  assert.deepEqual(parseNewOrders(html), [{
+    funpayOrderId: 'LLWUVCSD',
+    buyerId: null,
+    buyerUsername: 'buyer_name',
+    price: 1200,
+    status: 'Paid',
+    description: 'Steam account',
+    desiredMmr: null,
+    lotId: 73721885,
+    lotCount: 1,
+    createdLabel: 'today',
+  }]);
+});
+
 test('ignores other numeric values when lot count is absent', () => {
   const html = `
     <div class="tc-item info">

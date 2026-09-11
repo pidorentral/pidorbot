@@ -20,17 +20,40 @@ function getBuyerId(html) {
   return match ? Number(match[2]) : null;
 }
 function parseLotId(html) {
+  const hrefMatches = [...html.matchAll(/href=(['"])([^'"]+)\1/gi)];
+  for (const match of hrefMatches) {
+    const rawUrl = match[2];
+    try {
+      const url = new URL(rawUrl.startsWith('http') ? rawUrl : `https://funpay.com${rawUrl}`);
+      const queryId = ['id', 'offer_id', 'lot_id', 'offerId', 'lotId']
+        .find((key) => url.searchParams.has(key));
+      if (queryId) {
+        const value = Number(url.searchParams.get(queryId));
+        if (Number.isSafeInteger(value) && value > 0) return value;
+      }
+
+      const pathMatch = url.pathname.match(/\/(?:offer|lot|product)\/(\d+)(?:\/)?$/i);
+      if (pathMatch) {
+        const value = Number(pathMatch[1]);
+        if (Number.isSafeInteger(value) && value > 0) return value;
+      }
+    } catch {
+      // Ignore invalid href values; the literal regex fallback below still handles direct HTML attributes.
+    }
+  }
+
   const patterns = [
     /data-lot-id=(['"])(\d+)\1/i,
     /data-offer-id=(['"])(\d+)\1/i,
-    /href=(['"])https?:\/\/[^\/]+\/offer\/(\d+)\/?\1/i,
-    /href=(['"])https?:\/\/[^\/]+\/lot\/(\d+)\/?\1/i,
-    /href=(['"])https?:\/\/[^\/]+\/product\/(\d+)\/?\1/i,
+    /href=(['"])https?:\/\/[^\/]+\/offer\/(\d+)\/??\1/i,
+    /href=(['"])https?:\/\/[^\/]+\/lot\/(\d+)\/??\1/i,
+    /href=(['"])https?:\/\/[^\/]+\/product\/(\d+)\/??\1/i,
+    /href=(['"])(?:https?:\/\/[^'"]*?)?\/lots\/(?:offer|lot)(?:\/)?\?(?:[^'"]*?[&;])?id=(\d+)\1/i,
   ];
 
   for (const pattern of patterns) {
     const match = html.match(pattern);
-    if (match) return Number(match[2]);
+    if (match) return Number(match[2] || match[1]);
   }
 
   return null;

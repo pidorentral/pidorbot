@@ -21,6 +21,7 @@ const [
 ]);
 
 const client = new FunpayClient();
+globalThis.__FUNPAY_CLIENT__ = client;
 const logger = console;
 
 async function main() {

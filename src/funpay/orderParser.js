@@ -20,11 +20,23 @@ function getBuyerId(html) {
   return match ? Number(match[2]) : null;
 }
 function parseLotId(html) {
-  const hrefMatches = [...html.matchAll(/href=(['"])([^'"]+)\1/gi)];
+  const decoded = html
+    .replace(/&amp;/gi, '&')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/&nbsp;/gi, ' ');
+
+  const queryParamMatch = decoded.match(/(?:[?&;]|\b)(?:id|offer_id|lot_id|offerId|lotId)\s*=\s*(\d+)/i);
+  if (queryParamMatch) {
+    const value = Number(queryParamMatch[1]);
+    if (Number.isSafeInteger(value) && value > 0) return value;
+  }
+
+  const hrefMatches = [...decoded.matchAll(/(?:data-)?href\s*=\s*(['"])(.*?)\1/gi)];
   for (const match of hrefMatches) {
     const rawUrl = match[2];
     try {
-      const url = new URL(rawUrl.startsWith('http') ? rawUrl : `https://funpay.com${rawUrl}`);
+      const url = new URL(rawUrl.startsWith('http') ? rawUrl : rawUrl.startsWith('//') ? `https:${rawUrl}` : `https://funpay.com${rawUrl}`);
       const queryId = ['id', 'offer_id', 'lot_id', 'offerId', 'lotId']
         .find((key) => url.searchParams.has(key));
       if (queryId) {
@@ -43,16 +55,18 @@ function parseLotId(html) {
   }
 
   const patterns = [
-    /data-lot-id=(['"])(\d+)\1/i,
-    /data-offer-id=(['"])(\d+)\1/i,
-    /href=(['"])https?:\/\/[^\/]+\/offer\/(\d+)\/??\1/i,
-    /href=(['"])https?:\/\/[^\/]+\/lot\/(\d+)\/??\1/i,
-    /href=(['"])https?:\/\/[^\/]+\/product\/(\d+)\/??\1/i,
-    /href=(['"])(?:https?:\/\/[^'"]*?)?\/lots\/(?:offer|lot)(?:\/)?\?(?:[^'"]*?[&;])?id=(\d+)\1/i,
+    /(?:data-)?lot-id\s*=\s*(['"])(\d+)\1/i,
+    /(?:data-)?offer-id\s*=\s*(['"])(\d+)\1/i,
+    /(?:data-)?href\s*=\s*(['"])https?:\/\/[^\/]+\/offer\/(\d+)\/??\1/i,
+    /(?:data-)?href\s*=\s*(['"])https?:\/\/[^\/]+\/lot\/(\d+)\/??\1/i,
+    /(?:data-)?href\s*=\s*(['"])https?:\/\/[^\/]+\/product\/(\d+)\/??\1/i,
+    /(?:data-)?href\s*=\s*(['"])(?:https?:\/\/[^'"]*?)?\/lots\/(?:offer|lot)(?:\/)?\?(?:[^'"]*?[&;])?id=(\d+)\1/i,
+    /(?:data-)?href\s*=\s*(['"])(?:https?:\/\/[^'"]*?)?\/lots\/(?:offer|lot)(?:\/)?\?(?:[^'"]*?[&;])?offer_id=(\d+)\1/i,
+    /(?:data-)?href\s*=\s*(['"])(?:https?:\/\/[^'"]*?)?\/lots\/(?:offer|lot)(?:\/)?\?(?:[^'"]*?[&;])?lot_id=(\d+)\1/i,
   ];
 
   for (const pattern of patterns) {
-    const match = html.match(pattern);
+    const match = html.match(pattern) || decoded.match(pattern);
     if (match) return Number(match[2] || match[1]);
   }
 

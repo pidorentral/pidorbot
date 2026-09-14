@@ -1,80 +1,166 @@
-# pidorbot
+# PidorBot
 
-Super mega cool auto rent bot for FunPay.
+PidorBot is a Telegram admin bot for Steam/FunPay rental operations. It manages Steam account state, watches FunPay orders, handles account expiry and cleanup, processes review claims, and gives admins a single command surface for routine operations.
 
-## Overview
+## What this project does
 
-`pidorbot` automates rental order management, review bonus claims, and review verification for FunPay account rentals.
+- Manages Steam account inventory and cookie state
+- Monitors FunPay orders and parse lot/offer identifiers
+- Handles rental expiry flow, cleanup, and retry scheduling
+- Supports Steam account recovery and deauthorization workflows
+- Provides Telegram admin UI for account management and operational checks
+- Keeps sensitive FunPay credentials encrypted and stored in the database instead of only in `.env`
 
-## Features
+## Main system components
 
-- Telegram bot for users and admins
-- Review bonus claim flow with manual and automated verification
-- Database audit logging for review approvals and rejections
-- Title-based account matching for new rentals
-- CI workflow with PostgreSQL and `DATABASE_URL`
+- `tgBot/tg.js` — Telegram UI and admin interaction layer
+- `src/funpay/client.js` — FunPay session, key management, request layer
+- `src/funpay/orderParser.js` — parses FunPay order markup and extracts offer/lot IDs
+- `src/dao/*.js` — database read/write logic
+- `steam/*.js` — Steam session recovery, cleanup, and password workflows
+- `scripts/*.js` — maintenance and migration utilities
+- `test/*.js` — regression tests for critical flows
 
-## Setup
+## Requirements
 
-1. Install dependencies:
+- Node.js 20+
+- PostgreSQL database
+- Telegram bot token
+- FunPay golden key or runtime key update via Telegram settings
+- Playwright browser runtime for Steam/browser automation
+
+## Quick start
+
+1. Copy the example environment file:
+
+```bash
+copy .env.example .env
+```
+
+2. Fill in your real values in `.env`:
+
+```env
+BOT_TOKEN=your_telegram_bot_token
+TG_ADMIN_IDS=123456789,987654321
+DATABASE_URL=postgresql://user:password@host:5432/db
+ENCRYPTION_KEY=your-32-byte-base64-or-hex-key
+
+FUNPAY_GOLDEN_KEY=your_funpay_golden_key
+FUNPAY_POLL_INTERVAL_MS=15000
+FUNPAY_CHAT_POLL_MS=20000
+FUNPAY_POLLING_ENABLED=true
+```
+
+3. Install dependencies:
 
 ```bash
 npm install
 ```
 
-2. Configure environment variables in `.env`:
-
-```env
-DATABASE_URL=postgres://user:pass@host:5432/dbname
-BOT_TOKEN=<telegram-bot-token>
-ADMIN_IDS=<comma-separated-admin-ids>
-```
-
-3. Run database migrations:
+4. Start the app:
 
 ```bash
-node scripts/createIndexes.js
-node scripts/createReviewsTable.js
-node scripts/createReviewAuditsTable.js
-node scripts/addRentalCleanupLifecycle.js
+npm start
 ```
 
-4. Start the bot:
+The app boots through `bootstrap.js`, which starts the cleanup retry worker and then loads the main bot.
+
+## Runtime configuration
+
+The bot supports a secure runtime settings flow in Telegram:
+
+- `/settings`
+- `Update FunPay key`
+- send the new golden key value
+- the key is encrypted and stored in the `settings` table
+
+The project uses encrypted storage for the active secret and applies it immediately to the live FunPay client. This avoids needing to edit `.env` every time the key rotates.
+
+## Database requirements
+
+The app expects PostgreSQL with the schema used by the DAO and migration scripts. Common operational scripts available via the package scripts include:
 
 ```bash
-node main.js
+npm run db:create-indexes
+npm run db:smoke
+npm run funpay:check
+npm run db:cleanup-retry
 ```
 
-## Review bonus workflow
+The core settings is stored in the `settings` table in the pattern:
 
-1. User submits a review claim with `/claim_review`.
-2. The claim is stored in `reviews` as pending.
-3. Admins review pending claims using `/reviews`.
-4. Admins can `Auto-check`, `Confirm`, or `Reject` claims.
-5. When confirmed, the rental is extended by 1 hour and the bonus is recorded.
+- `key` — text primary key
+- `value` — jsonb payload
+- `updated_at` — timestamp
 
-## Admin instructions
+For FunPay key storage, the value is encrypted before persisting.
 
-See `ADMIN_INSTRUCTIONS.md` for detailed admin workflow and review handling.
+## Telegram commands
+
+Common admin commands include:
+
+- `/start` — home panel
+- `/settings` — bot settings
+- `/accs` — list accounts
+- `/orders` — recent orders
+- `/active_rentals` — active rentals
+- `/cleanup_history` — cleanup attempts history
+- `/offers` — account offer bindings
+- `/claim_review` — review claim workflow
+- `/reviews` — review queue
+
+## Environment variables
+
+Required or commonly used variables:
+
+- `BOT_TOKEN` — Telegram bot token
+- `TG_ADMIN_IDS` — admin Telegram user IDs, comma-separated
+- `DATABASE_URL` — PostgreSQL connection string
+- `ENCRYPTION_KEY` — AES key used for encrypted storage
+- `FUNPAY_GOLDEN_KEY` — initial FunPay golden key or fallback value
+- `FUNPAY_POLL_INTERVAL_MS` — FunPay order poll interval
+- `FUNPAY_CHAT_POLL_MS` — chat polling interval
+- `FUNPAY_POLLING_ENABLED` — enable polling loop
+- `STEAM_BROWSER_PROFILE_DIR` — local Steam browser profile directory
+- `STEAM_BROWSER_HEADLESS` — headless browser mode
+- `ENABLE_PASSWORD_CHANGE` — optional password rotation flag
+
+## Security notes
+
+- Sensitive values are encrypted before storage
+- Telegram admin access is restricted by `TG_ADMIN_IDS`
+- The project avoids exposing raw secrets in user-facing messages
+- Storage is DB-backed, which makes rotating keys and runtime updates much safer than manually editing a single `.env` variable on every change
 
 ## Testing
 
-Run tests with:
+Run the project test suite:
 
 ```bash
 npm test
 ```
 
-If `DATABASE_URL` is missing, DB-dependent tests will skip.
+The suite covers order parsing, account recovery, cleanup logic, and runtime validation guards.
 
-## CI
+## Project layout
 
-The repository includes GitHub Actions workflow at `.github/workflows/ci.yml`.
-It runs PostgreSQL, migrations, and tests on push.
+```text
+.
+├── src/                     # core application logic
+├── tgBot/                  # Telegram bot UI and callbacks
+├── steam/                  # Steam recovery and cleanup routines
+├── scripts/                # maintenance and migration utilities
+├── test/                   # automated tests
+├── .env.example            # sample environment configuration
+├── bootstrap.js            # app bootstrap with singleton lock
+├── main.js                 # app entrypoint
+├── package.json            # scripts and dependencies
+├── README.md               # project overview and setup guide
+└── .gitignore              # repo ignore rules
+```
 
 ## Notes
 
-- The bot uses `tgBot/tg.js` for Telegram interaction.
-- Review verification is logged in `review_audits` for accountability.
-- Duplicate verification attempts are safe and do not grant duplicate bonuses.
-- Rental teardown is fail-closed: Steam sessions are revoked first, and the account remains disabled until fresh cookies are saved through Telegram.
+- The app intentionally keeps bot logic and business logic separated between Telegram flow, DB access, and Steam/FunPay service layers.
+- Runtime updates are applied without restarting the process where supported, especially for the FunPay golden key.
+- For local development, use `.env` and do not commit production secrets.

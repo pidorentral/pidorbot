@@ -30,6 +30,7 @@ import {
 import { parseMafile } from '../steam/mafile.js';
 import { generateSteamGuardCode } from '../steam/steamGuard.js';
 import * as crypto from '../src/crypto.js';
+import { getGoldenKey, setGoldenKey } from '../src/funpay/client.js';
 
 const COMMANDS = [
   { command: 'stats', description: 'Summary: accounts, rentals, orders' },
@@ -204,6 +205,7 @@ function buildRentalExtensionKeyboard(rentalId) {
       Markup.button.callback('+4h', `rental_extend:${rentalId}:4`),
     ],
     [Markup.button.callback('Custom hours', `rental_extend_custom:${rentalId}`)],
+    [Markup.button.callback('Main menu', 'main_menu')],
   ]);
 }
 
@@ -214,6 +216,7 @@ function reviewDecisionKeyboard(reviewId) {
       Markup.button.callback('Reject', `review_reject:${reviewId}`),
     ],
     [Markup.button.callback('Back', 'reviews')],
+    [Markup.button.callback('Main menu', 'main_menu')],
   ]);
 }
 
@@ -232,9 +235,10 @@ async function showActiveRentals(ctx) {
   }
 
   const lines = rentals.map((r) => `#${r.id} account #${r.accountId}\nBuyer: ${r.buyer}\nUntil: ${r.endsAt}`);
-  const keyboard = Markup.inlineKeyboard(
-    rentals.map((r) => [Markup.button.callback(`#${r.id} · extend`, `rental_extend_custom:${r.id}`)])
-  );
+  const keyboard = Markup.inlineKeyboard([
+    ...rentals.map((r) => [Markup.button.callback(`#${r.id} · extend`, `rental_extend_custom:${r.id}`)]),
+    [Markup.button.callback('Main menu', 'main_menu')],
+  ]);
 
   await answer(ctx, ['Active rentals', '', ...lines].join('\n\n'), keyboard);
 }
@@ -276,7 +280,22 @@ function formatCleanupStatus(rental) {
 }
 
 async function showSettings(ctx) {
-  await answer(ctx, ['Settings', '', 'No configurable settings yet.'].join('\n'));
+  let currentKey = 'not configured';
+  try {
+    const value = await getGoldenKey();
+    currentKey = `${value.slice(0, 6)}********`;
+  } catch {
+    // keep the safe fallback above
+  }
+
+  await answer(
+    ctx,
+    ['Settings', '', `FunPay key: ${currentKey}`, '', 'Update the active key securely in the database.'].join('\n'),
+    Markup.inlineKeyboard([
+      [Markup.button.callback('Update FunPay key', 'settings_update_funpay_key')],
+      [Markup.button.callback('Main menu', 'main_menu')],
+    ]),
+  );
 }
 
 async function bindOfferCommand(ctx) {
@@ -341,7 +360,7 @@ export function createBot(config = getConfig()) {
   });
 
   bot.command('stats', showStats);
-  bot.command('accs', showAccounts);
+  bot.command('accs', (ctx) => showAccounts(ctx, 'all'));
   bot.command('active_rentals', showActiveRentals);
   bot.command('add_acc', addAccountCommand);
   bot.command('recover_test', recoverTestCommand);
@@ -358,7 +377,7 @@ export function createBot(config = getConfig()) {
   bot.hears(/^\/add-acc(?:\s|$)/i, addAccountCommand);
 
   bot.action('stats', showStats);
-  bot.action('accs', showAccounts);
+  bot.action('accs', (ctx) => showAccounts(ctx, 'all'));
   bot.action('accounts_all', (ctx) => showAccounts(ctx, 'all'));
   bot.action('accounts_available', (ctx) => showAccounts(ctx, 'available'));
   bot.action('accounts_rented', (ctx) => showAccounts(ctx, 'rented'));
@@ -372,6 +391,16 @@ export function createBot(config = getConfig()) {
   bot.action('orders', showOrders);
   bot.action('cleanup_history', showCleanupHistory);
   bot.action('settings', showSettings);
+  bot.action('settings_update_funpay_key', async (ctx) => {
+    sessions.set(ctx.from.id, { flow: 'update_funpay_key', step: 'golden_key' });
+    await safeAnswerCb(ctx);
+    return ctx.editMessageText(
+      'Send the new FunPay golden_key value. It will be encrypted and stored in the database, then applied immediately.',
+      Markup.inlineKeyboard([
+        [Markup.button.callback('Cancel', 'settings')],
+      ]),
+    );
+  });
   bot.action('claim_review', startClaimReview);
   bot.action('reviews', showReviews);
   bot.action(/^acc_code:(\d+)$/, async (ctx) => {
@@ -507,6 +536,7 @@ export function createBot(config = getConfig()) {
     await answer(ctx, ['Pending reviews', '', ...lines].join('\n'), Markup.inlineKeyboard([
       ...reviews.map((r) => [Markup.button.callback(`Open #${r.id}`, `review_open:${r.id}`)]),
       [Markup.button.callback('Back', 'reviews_back')],
+      [Markup.button.callback('Main menu', 'main_menu')],
     ]));
   }
 
@@ -1083,6 +1113,26 @@ export function createBot(config = getConfig()) {
       }
     }
 
+    if (session?.flow === 'update_funpay_key') {
+      const text = ctx.message?.text?.trim();
+      const key = text?.replace(/^golden_key\s*[:=]?\s*/i, '').trim();
+
+      if (!key) {
+        return ctx.reply('FunPay golden_key is empty. Send the value again or type /settings to cancel.');
+      }
+
+      try {
+        const nextKey = await setGoldenKey(key);
+        if (globalThis.__FUNPAY_CLIENT__ && typeof globalThis.__FUNPAY_CLIENT__.setGoldenKey === 'function') {
+          await globalThis.__FUNPAY_CLIENT__.setGoldenKey(nextKey);
+        }
+        sessions.delete(ctx.from.id);
+        return ctx.reply('FunPay golden_key updated successfully and applied. Use /settings to verify it.', mainMenu());
+      } catch (err) {
+        return ctx.reply(uiError('update FunPay key', err, 'Failed to update FunPay key. Please try again.'));
+      }
+    }
+
     if (session?.flow === 'claim_review') {
       const text = ctx.message?.text?.trim();
       if (!text) return ctx.reply('Send text value');
@@ -1472,6 +1522,7 @@ function accountCardKeyboard(account) {
     ],
     [
       Markup.button.callback('Back', 'accs_back'),
+      Markup.button.callback('Main menu', 'main_menu'),
     ],
   ]);
 }
@@ -1498,6 +1549,7 @@ function accountOffersKeyboard(accountId, offers) {
     [Markup.button.callback('Add offer', `acc_offer_add:${accountId}`)],
     ...offers.map((offer) => [Markup.button.callback(`Unbind ${offer.offerId}`, `acc_offer_unbind:${accountId}:${offer.offerId}`)]),
     [Markup.button.callback('Back to account', `acc_open:${accountId}`)],
+    [Markup.button.callback('Main menu', 'main_menu')],
   ]);
 }
 
@@ -1663,6 +1715,25 @@ async function continueAddAccount(ctx, session) {
     }
   }
 
+  // update_funpay_key flow
+  if (session.flow === 'update_funpay_key') {
+    const key = text.trim().replace(/^golden_key\s*[:=]?\s*/i, '').trim();
+    if (!key) {
+      return ctx.reply('FunPay golden_key is empty. Send the value again or type /settings to cancel.');
+    }
+
+    try {
+      const nextKey = await setGoldenKey(key);
+      if (globalThis.__FUNPAY_CLIENT__ && typeof globalThis.__FUNPAY_CLIENT__.setGoldenKey === 'function') {
+        await globalThis.__FUNPAY_CLIENT__.setGoldenKey(nextKey);
+      }
+      sessions.delete(ctx.from.id);
+      return ctx.reply('FunPay golden_key updated successfully and applied. Use /settings to verify it.', mainMenu());
+    } catch (err) {
+      return ctx.reply(uiError('update FunPay key', err, 'Failed to update FunPay key. Please try again.'));
+    }
+  }
+
   // edit_account flow
   if (session.flow === 'edit_account') {
     switch (session.step) {
@@ -1699,7 +1770,6 @@ async function continueAddAccount(ctx, session) {
 function mainMenu() {
   return Markup.inlineKeyboard([
     [
-      Markup.button.callback('Stats', 'stats'),
       Markup.button.callback('Accounts', 'accs'),
     ],
     [

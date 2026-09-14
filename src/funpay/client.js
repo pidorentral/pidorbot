@@ -1,3 +1,5 @@
+import { query } from '../db.js';
+import * as crypto from '../crypto.js';
 import { parseNewOrders } from './orderParser.js';
 
 const FUNPAY_URL = 'https://funpay.com/';
@@ -16,9 +18,80 @@ export class FunpayRateLimitError extends Error {
   }
 }
 
-function getGoldenKey() {
-  const key = process.env.FUNPAY_GOLDEN_KEY?.trim();
-  if (!key) throw new Error('FUNPAY_GOLDEN_KEY is not configured');
+export async function resolveSettingsTable(queryFn = query) {
+  const tableCheck = await queryFn(`
+    SELECT table_name
+    FROM information_schema.tables
+    WHERE table_schema = current_schema()
+      AND table_name IN ('settings', 'app_settings')
+    ORDER BY table_name = 'settings' DESC, table_name
+    LIMIT 1
+  `);
+
+  if (tableCheck.rows?.length) {
+    return tableCheck.rows[0].table_name;
+  }
+
+  try {
+    await queryFn(`
+      CREATE TABLE IF NOT EXISTS settings (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+    return 'settings';
+  } catch {
+    await queryFn(`
+      CREATE TABLE IF NOT EXISTS app_settings (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+    return 'app_settings';
+  }
+}
+
+export async function getGoldenKey() {
+  const tableName = await resolveSettingsTable();
+
+  const result = await query(
+    `SELECT value FROM ${tableName} WHERE key = $1 LIMIT 1`,
+    ['FUNPAY_GOLDEN_KEY'],
+  );
+
+  const rawValue = result.rows[0]?.value;
+  const value = typeof rawValue === 'string'
+    ? rawValue
+    : rawValue == null
+      ? null
+      : JSON.stringify(rawValue);
+
+  if (!value) {
+    throw new Error('FUNPAY_GOLDEN_KEY is not configured');
+  }
+
+  return crypto.decrypt(value);
+}
+
+export async function setGoldenKey(value) {
+  const key = String(value || '').trim();
+  if (!key) {
+    throw new Error('FUNPAY_GOLDEN_KEY cannot be empty');
+  }
+
+  const encrypted = crypto.encrypt(key);
+  const tableName = await resolveSettingsTable();
+  const jsonValue = JSON.stringify(encrypted);
+
+  await query(
+    `INSERT INTO ${tableName} (key, value, updated_at)
+     VALUES ($1, $2::jsonb, NOW())
+     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()`,
+    ['FUNPAY_GOLDEN_KEY', jsonValue],
+  );
+
   return key;
 }
 
@@ -113,19 +186,33 @@ function findNodeIdByUsername(html, username) {
 }
 
 export class FunpayClient {
-  constructor({ goldenKey = getGoldenKey(), fetchImpl = globalThis.fetch } = {}) {
+  constructor({ goldenKey = null, fetchImpl = globalThis.fetch } = {}) {
     if (typeof fetchImpl !== 'function') throw new Error('A fetch implementation is required');
-    this.goldenKey = goldenKey;
+    this.goldenKey = goldenKey || '';
     this.fetch = fetchImpl;
     this._appData = null;
-    this.cookies = new Map()
+    this.cookies = new Map();
+  }
+
+  async ensureGoldenKey() {
+    if (!this.goldenKey) {
+      this.goldenKey = await getGoldenKey();
+    }
+    this.cookies.set('golden_key', this.goldenKey);
+    return this.goldenKey;
+  }
+
+  async setGoldenKey(value) {
+    this.goldenKey = await setGoldenKey(value);
+    this.cookies.set('golden_key', this.goldenKey);
+    return this.goldenKey;
   }
 
   _buildCookieHeader() {
-  const cookies = new Map(this.cookies);
-  cookies.set('golden_key', this.goldenKey);
-  return [...cookies].map(([k, v]) => `${k}=${v}`).join('; ');
-}
+    const cookies = new Map(this.cookies);
+    cookies.set('golden_key', this.goldenKey);
+    return [...cookies].map(([k, v]) => `${k}=${v}`).join('; ');
+  }
 
   _captureSetCookies(response) {
     const raw = response.headers.getSetCookie?.() || response.headers.raw?.()['set-cookie'] || [];
@@ -137,6 +224,7 @@ export class FunpayClient {
   }
 
   async _requestResponse(path = '', options = {}) {
+    await this.ensureGoldenKey();
     const { headers = {}, ...requestOptions } = options;
     const response = await this.fetch(new URL(path, FUNPAY_URL), {
       ...requestOptions,

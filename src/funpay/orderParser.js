@@ -108,7 +108,7 @@ export function parseLotId(html, logger = console) {
     if (match) return Number(match[2] || match[1]);
   }
 
-  logger?.warn?.(`FunPay lot detection failed; sample=${String(html || '').slice(0, 600).replace(/\s+/g, ' ').trim()}`);
+  logger?.debug?.(`FunPay lot detection failed; sample=${String(html || '').slice(0, 600).replace(/\s+/g, ' ').trim()}`);
   return null;
 }
 
@@ -153,7 +153,7 @@ export function parseNewOrders(html, logger = console) {
     const description = getClassText(row, 'order-desc');
     const lotId = parseLotId(row, logger);
     if (!lotId) {
-      logger?.warn?.(`FunPay order #${orderNumber}: no lotId found in parsed row; rowPreview=${String(row).slice(0, 600).replace(/\s+/g, ' ').trim()}`);
+      logger?.debug?.(`FunPay order #${orderNumber}: no lotId in trade row; rowPreview=${String(row).slice(0, 600).replace(/\s+/g, ' ').trim()}`);
     }
 
     orders.push({

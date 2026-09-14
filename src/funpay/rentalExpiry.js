@@ -241,7 +241,9 @@ async function deauthorizeRental(rental) {
   }
 
   // Deauthorize before finalizing the rental so the renter loses Steam access first.
-  return deauthorizeAllDevices(cookies.sessionid, cookies.steamLoginSecure);
+  // Keep the full cookie bundle, not just the two required fields: Steam auth can depend on
+  // steamMachineAuth / steamRememberLogin and other browser-bound cookies during the logout flow.
+  return deauthorizeAllDevices(cookies);
 }
 
 async function tryAutomaticRenewal(rental, { renewalResolver, logger, notifyAdmin }) {

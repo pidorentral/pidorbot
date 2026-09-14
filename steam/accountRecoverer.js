@@ -764,12 +764,16 @@ export class SteamAccountRecoverer {
 
 export async function deauthorizeAllDevices(sessionId, steamLoginSecure, options = {}) {
     // Keep this public helper small so cleanup callers do not need to know recovery internals.
+    const cookieBundle = typeof sessionId === 'object' && sessionId !== null
+        ? sessionId
+        : { sessionid: sessionId, steamLoginSecure };
+
     const recoverer = new SteamAccountRecoverer({
         login: options.login || '',
         oldPassword: '',
         newPassword: '',
         sharedSecret: '',
-        cookies: { sessionid: sessionId, steamLoginSecure },
+        cookies: cookieBundle,
         userAgent: options.userAgent,
         timeout: options.timeout,
     });

@@ -5,7 +5,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert';
-import { SteamAccountRecoverer, SteamPasswordChangeError, recoverSteamAccount, extractRecoveryParams, isPasswordChangeEnabled, formatSteamError, isDeauthorizationSuccessPage, isSteamLoginPageUrl, buildSteamBrowserCookieEntries } from '../steam/accountRecoverer.js';
+import { SteamAccountRecoverer, SteamPasswordChangeError, recoverSteamAccount, extractRecoveryParams, isPasswordChangeEnabled, formatSteamError, isDeauthorizationSuccessPage, isSteamLoginPageUrl, buildSteamBrowserCookieEntries, deauthorizeAllDevices } from '../steam/accountRecoverer.js';
 
 /**
  * Test: Constructor validates input
@@ -163,6 +163,31 @@ test('SteamAccountRecoverer - falls back to browser on a deauthorization redirec
 
     const result = await recoverer._deauthorizeAllDevices();
     assert.deepEqual(result, { success: true, via: 'browser' });
+});
+
+test('deauthorizeAllDevices - preserves the full Steam cookie bundle for real rentals', async () => {
+    const original = SteamAccountRecoverer.prototype._deauthorizeAllDevices;
+    let seenCookies;
+
+    SteamAccountRecoverer.prototype._deauthorizeAllDevices = async function() {
+        seenCookies = { ...this.cookies };
+        return { success: true, via: 'browser' };
+    };
+
+    try {
+        const cookies = {
+            sessionid: 'session',
+            steamLoginSecure: 'secure',
+            steamMachineAuth: 'mauth',
+            steamRememberLogin: '1',
+        };
+
+        const result = await deauthorizeAllDevices(cookies);
+        assert.deepEqual(result, { success: true, via: 'browser' });
+        assert.deepEqual(seenCookies, cookies);
+    } finally {
+        SteamAccountRecoverer.prototype._deauthorizeAllDevices = original;
+    }
 });
 
 test('SteamAccountRecoverer - recognizes persistent browser profile configuration', () => {

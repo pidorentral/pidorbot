@@ -561,26 +561,23 @@ export class SteamAccountRecoverer {
                     headless,
                     userAgent: this.userAgent,
                 });
+                // The profile may hold a stale or expired Steam session. Playwright applies the
+                // persisted auth state first, so simply adding cookies afterwards is not enough to
+                // override it — the stale cookies must be wiped before fresh ones are applied.
+                await context.clearCookies();
             } else {
                 browser = await chromium.launch({ headless: true });
                 context = await browser.newContext({ userAgent: this.userAgent });
-                await context.addCookies(Object.entries(this.cookies).map(([name, value]) => ({
-                    name,
-                    value: String(value),
-                    domain: '.steampowered.com',
-                    path: '/',
-                })));
             }
 
-            if (profileDir) {
-                // Refresh auth cookies from the account record; the profile may contain a previous session.
-                await context.addCookies(Object.entries(this.cookies).map(([name, value]) => ({
-                    name,
-                    value: String(value),
-                    domain: '.steampowered.com',
-                    path: '/',
-                })));
-            }
+            // Always seed the fresh cookies from the account record so the browser session
+            // reflects the latest known-good auth state, regardless of profile usage.
+            await context.addCookies(Object.entries(this.cookies).map(([name, value]) => ({
+                name,
+                value: String(value),
+                domain: '.steampowered.com',
+                path: '/',
+            })));
 
             const page = await context.newPage();
             await page.goto('https://store.steampowered.com/twofactor/manage', {

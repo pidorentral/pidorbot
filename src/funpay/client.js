@@ -297,9 +297,9 @@ export class FunpayClient {
 
   // Orders
 
-  async getNewOrders() {
+  async getNewOrders(logger = console) {
     const html = await this.request('orders/trade');
-    return parseNewOrders(html);
+    return parseNewOrders(html, logger);
   }
 
   // Messages

@@ -52,7 +52,7 @@ export function createFunpayPoller({
     polling = true;
 
     try {
-      const orders = await client.getNewOrders();
+      const orders = await client.getNewOrders(logger);
       const unseenOrders = orders.filter((order) => !seenOrderIds.has(order.funpayOrderId));
 
       if (!initialSnapshotLoaded) {

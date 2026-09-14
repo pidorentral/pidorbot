@@ -58,7 +58,7 @@ function parseNumericValue(value) {
   return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
 }
 
-export function parseLotId(html) {
+export function parseLotId(html, logger = console) {
   const decoded = html
     .replace(/&amp;/gi, '&')
     .replace(/&quot;/gi, '"')
@@ -108,6 +108,7 @@ export function parseLotId(html) {
     if (match) return Number(match[2] || match[1]);
   }
 
+  logger?.warn?.(`FunPay lot detection failed; sample=${String(html || '').slice(0, 600).replace(/\s+/g, ' ').trim()}`);
   return null;
 }
 
@@ -166,7 +167,7 @@ function parseDesiredMmr(description = '') {
   return Math.round(mmr * 1000);
 }
 
-export function parseNewOrders(html) {
+export function parseNewOrders(html, logger = console) {
   const starts = [...html.matchAll(/<[^>]*class=(['"])[^'"]*\btc-item\b[^'"]*\binfo\b[^'"]*\1[^>]*>/gi)];
   const orders = [];
 
@@ -178,6 +179,11 @@ export function parseNewOrders(html) {
     if (!orderNumber) continue;
 
     const description = getClassText(row, 'order-desc');
+    const lotId = parseLotId(row, logger);
+    if (!lotId) {
+      logger?.warn?.(`FunPay order #${orderNumber}: no lotId found in parsed row; rowPreview=${String(row).slice(0, 600).replace(/\s+/g, ' ').trim()}`);
+    }
+
     orders.push({
       funpayOrderId: orderNumber,
       buyerId: getBuyerId(row),
@@ -186,7 +192,7 @@ export function parseNewOrders(html) {
       status: getClassText(row, 'tc-status'),
       description,
       desiredMmr: parseDesiredMmr(description),
-      lotId: parseLotId(row),
+      lotId,
       lotCount: parseLotCount(row, description),
       createdLabel: getClassText(row, 'tc-date-time'),
     });

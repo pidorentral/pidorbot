@@ -11,6 +11,7 @@ import {
     extendActiveRental,
     getActiveAccountOffer,
 } from "../../dao/write.js";
+import { parseLotId } from '../orderParser.js';
 import { generateSteamGuardCode } from '../../../steam/steamGuard.js';
 
 export async function handleNewOrders(orders, logger, { client, notifyAdmin }) {
@@ -34,6 +35,8 @@ export async function handleNewOrders(orders, logger, { client, notifyAdmin }) {
 async function processOrder(order, { client, logger, notifyAdmin }) {
   const { funpayOrderId, buyerId, buyerUsername: buyer, price, lotId, lotCount = 1 } = order;
 
+  logger.info(`Order #${funpayOrderId}: processing raw payload: buyer=${buyer || 'unknown'}, buyerId=${buyerId ?? 'n/a'}, price=${price ?? 'n/a'}, lotId=${lotId ?? 'n/a'}, lotCount=${lotCount ?? 'n/a'}`);
+
   const existing = await getOrderByFunpayId(funpayOrderId);
   if (existing && existing.status === 'fulfilled') {
     logger.info(`Order #${funpayOrderId} already fulfilled, skipping`);
@@ -41,12 +44,33 @@ async function processOrder(order, { client, logger, notifyAdmin }) {
   }
 
   const quantity = Math.max(1, Number.isFinite(Number(lotCount)) ? Number(lotCount) : 1);
-  if (!lotId) {
+  let resolvedLotId = lotId;
+
+  if (!resolvedLotId) {
+    logger.warn(`Order #${funpayOrderId}: no lotId in trade row; trying detail-page fallback`);
+    for (const path of [`orders/${encodeURIComponent(funpayOrderId)}/`, `order/${encodeURIComponent(funpayOrderId)}/`, `chats/${encodeURIComponent(funpayOrderId)}/`]) {
+      try {
+        const detailHtml = await client.request(path);
+        const detailLotId = parseLotId(detailHtml, logger);
+        if (detailLotId) {
+          resolvedLotId = detailLotId;
+          logger.info(`Order #${funpayOrderId}: resolved lotId=${detailLotId} from ${path}`);
+          break;
+        }
+      } catch (err) {
+        logger.warn(`Order #${funpayOrderId}: detail-page fallback failed for ${path}: ${err.message}`);
+      }
+    }
+  }
+
+  if (!resolvedLotId) {
     const message = `⚠️ Заказ #${funpayOrderId}: не удалось получить ID оффера — выдача остановлена.`;
-    logger.error(message);
+    logger.error(`${message} | debug: buyer=${buyer || 'unknown'}, buyerId=${buyerId ?? 'n/a'}, orderPayload=${JSON.stringify({ funpayOrderId, buyer, buyerId, price, lotCount })}`);
     if (notifyAdmin) await notifyAdmin(message);
     return false;
   }
+
+  const effectiveLotId = resolvedLotId;
 
   // Создаём/обновляем заказ как "paid", а не сразу "fulfilled"
   let dbOrder = existing;
@@ -57,7 +81,7 @@ async function processOrder(order, { client, logger, notifyAdmin }) {
           buyer,
           price,
           status: 'paid',
-          lotId,
+          lotId: effectiveLotId,
           lotCount: quantity,
       });
   }
@@ -73,9 +97,9 @@ async function processOrder(order, { client, logger, notifyAdmin }) {
 
   const existingActiveRental = await getActiveRentalByBuyer(buyer);
   if (existingActiveRental) {
-    const offer = await getActiveAccountOffer(existingActiveRental.accountId, lotId);
+    const offer = await getActiveAccountOffer(existingActiveRental.accountId, effectiveLotId);
     if (!offer) {
-      const message = `⚠️ Заказ #${funpayOrderId}: оффер ${lotId} не привязан к активному аккаунту #${existingActiveRental.accountId}; выдача остановлена.`;
+      const message = `⚠️ Заказ #${funpayOrderId}: оффер ${effectiveLotId} не привязан к активному аккаунту #${existingActiveRental.accountId}; выдача остановлена.`;
       logger.error(message);
       if (notifyAdmin) await notifyAdmin(message);
       return false;
@@ -111,7 +135,7 @@ async function processOrder(order, { client, logger, notifyAdmin }) {
       buyer,
       orderId: dbOrder.id,
       nodeId,
-      offerId: lotId,
+      offerId: effectiveLotId,
       quantity,
     });
 

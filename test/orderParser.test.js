@@ -22,14 +22,13 @@ test('parses new FunPay orders from trade page markup', () => {
     price: 1234.5,
     status: 'Paid',
     description: 'Steam account',
-    desiredMmr: null,
     lotId: null,
     lotCount: 1,
     createdLabel: 'today',
   }]);
 });
 
-test('parses desiredMmr from order description', () => {
+test('ignores rating mentions in order description', () => {
   const html = `
     <div class="tc-item info">
       <div class="tc-order">#DEF-456</div>
@@ -37,7 +36,7 @@ test('parses desiredMmr from order description', () => {
       <div class="media-user-name">buyer_name</div>
       <div class="tc-price">999 ₽</div>
       <div class="tc-status">Paid</div>
-      <div class="order-desc">Dota 2 аккаунт 5к ММР</div>
+      <div class="order-desc">Dota 2 аккаунт 5к рейтинг</div>
       <div class="tc-date-time">today</div>
     </div>
   `;
@@ -48,8 +47,7 @@ test('parses desiredMmr from order description', () => {
     buyerUsername: 'buyer_name',
     price: 999,
     status: 'Paid',
-    description: 'Dota 2 аккаунт 5к ММР',
-    desiredMmr: 5000,
+    description: 'Dota 2 аккаунт 5к рейтинг',
     lotId: null,
     lotCount: 1,
     createdLabel: 'today',
@@ -76,7 +74,6 @@ test('parses lot count from order description', () => {
     price: 999,
     status: 'Paid',
     description: 'Steam account x2',
-    desiredMmr: null,
     lotId: null,
     lotCount: 2,
     createdLabel: 'today',
@@ -103,7 +100,6 @@ test('parses lot count from Russian quantity words', () => {
     price: 1200,
     status: 'Paid',
     description: 'Steam account 2 лота',
-    desiredMmr: null,
     lotId: null,
     lotCount: 2,
     createdLabel: 'today',
@@ -130,7 +126,6 @@ test('parses lot id from order link', () => {
     price: 1500,
     status: 'Paid',
     description: 'Steam account',
-    desiredMmr: null,
     lotId: 123456,
     lotCount: 1,
     createdLabel: 'today',
@@ -157,7 +152,6 @@ test('parses lot id from lots/offer?id= URL format', () => {
     price: 1200,
     status: 'Paid',
     description: 'Steam account',
-    desiredMmr: null,
     lotId: 73721885,
     lotCount: 1,
     createdLabel: 'today',
@@ -184,14 +178,13 @@ test('parses lot id from data-href lots/offer?id= URL format', () => {
     price: 1200,
     status: 'Paid',
     description: 'Steam account',
-    desiredMmr: null,
     lotId: 73721885,
     lotCount: 1,
     createdLabel: 'today',
   }]);
 });
 
-test('ignores other numeric values when lot count is absent', () => {
+test('ignores unrelated numeric values when lot count is absent', () => {
   const html = `
     <div class="tc-item info">
       <div class="tc-order">#PQR-999</div>
@@ -199,7 +192,7 @@ test('ignores other numeric values when lot count is absent', () => {
       <div class="media-user-name">buyer_name</div>
       <div class="tc-price">1 200 ₽</div>
       <div class="tc-status">Paid</div>
-      <div class="order-desc">Steam account 4 часа 2к ммр</div>
+      <div class="order-desc">Steam account 4 часа 2к рейтинг</div>
       <div class="tc-date-time">today</div>
     </div>
   `;
@@ -210,8 +203,7 @@ test('ignores other numeric values when lot count is absent', () => {
     buyerUsername: 'buyer_name',
     price: 1200,
     status: 'Paid',
-    description: 'Steam account 4 часа 2к ммр',
-    desiredMmr: 2000,
+    description: 'Steam account 4 часа 2к рейтинг',
     lotId: null,
     lotCount: 1,
     createdLabel: 'today',

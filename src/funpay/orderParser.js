@@ -132,39 +132,11 @@ function parseLotCount(html, description) {
 
   return 1;
 }
+
 function parsePrice(text) {
   if (!text) return null;
   const num = text.replace(/[^\d.,]/g, '').replace(',', '.');
   return num ? Number(num) : null;
-}
-
-function parseDesiredMmr(description = '') {
-  const normalized = String(description || '').toLowerCase().replace(/\u00A0/g, ' ');
-
-  const labelBeforeMatch = normalized.match(/(?:ммр|mmr)\D*(\d[\d\s]*(?:[.,]\d+)?)(?:\s*(k|к))?(?=\s|$)/);
-  if (labelBeforeMatch) {
-    const value = labelBeforeMatch[1].replace(/\s+/g, '').replace(',', '.');
-    const mmr = Number(value);
-    if (!Number.isFinite(mmr)) return null;
-    return Math.round(mmr * (labelBeforeMatch[2] ? 1000 : 1));
-  }
-
-  const labelAfterMatch = normalized.match(/(\d[\d\s]*(?:[.,]\d+)?)(?:\s*(k|к))?\s*(?:ммр|mmr)(?=\s|$)/);
-  if (labelAfterMatch) {
-    const value = labelAfterMatch[1].replace(/\s+/g, '').replace(',', '.');
-    const mmr = Number(value);
-    if (!Number.isFinite(mmr)) return null;
-    return Math.round(mmr * (labelAfterMatch[2] ? 1000 : 1));
-  }
-
-  const shortMatch = normalized.match(/(\d[\d\s]*(?:[.,]\d+)?)\s*(k|к)(?=\s|$)/);
-  if (!shortMatch) return null;
-
-  const value = shortMatch[1].replace(/\s+/g, '').replace(',', '.');
-  const mmr = Number(value);
-  if (!Number.isFinite(mmr)) return null;
-
-  return Math.round(mmr * 1000);
 }
 
 export function parseNewOrders(html, logger = console) {
@@ -191,7 +163,6 @@ export function parseNewOrders(html, logger = console) {
       price: parsePrice(getClassText(row, 'tc-price')),
       status: getClassText(row, 'tc-status'),
       description,
-      desiredMmr: parseDesiredMmr(description),
       lotId,
       lotCount: parseLotCount(row, description),
       createdLabel: getClassText(row, 'tc-date-time'),

@@ -118,53 +118,20 @@ export async function updateMafileCookies(accountId, cookies) {
   return { accountId, mafileId: result.rows[0].id };
 }
 
-function parseMmrFromText(text = '') {
-  const normalized = String(text || '').toLowerCase().replace(/\u00A0/g, ' ');
-  const match = normalized.match(/(\d[\d\s]*(?:[.,]\d+)?)\s*(k|к)?\b/);
-  if (!match) return null;
-
-  let value = match[1].replace(/\s+/g, '').replace(',', '.');
-  let mmr = Number(value);
-  if (!Number.isFinite(mmr)) return null;
-
-  if (match[2]) {
-    mmr = Math.round(mmr * 1000);
-  }
-
-  return Math.round(mmr);
-}
-
-function findAccountByMmr(accounts, desiredMmr) {
-  if (!desiredMmr) {
-    return accounts[0] || null;
-  }
-
-  return accounts.find((account) => {
-    if (account.mmr === desiredMmr) {
-      return true;
-    }
-    const titleMmr = parseMmrFromText(account.title);
-    if (titleMmr === desiredMmr) return true;
-    const notesMmr = parseMmrFromText(account.notes);
-    return notesMmr === desiredMmr;
-  }) || null;
-}
-
 export async function createOrder({
   funpayOrderId,
   buyer,
   accountId = null,
   price,
   status = 'new',
-  desiredMmr = null,
   lotId = null,
   lotCount = 1,
 }) {
   const res = await query(
-    `INSERT INTO orders (funpay_order_id, buyer, account_id, price, status, desired_mmr, lot_id, lot_count)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+    `INSERT INTO orders (funpay_order_id, buyer, account_id, price, status, lot_id, lot_count)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)
      RETURNING *`,
-    [funpayOrderId, buyer, accountId, price, status, desiredMmr, lotId, lotCount]
+    [funpayOrderId, buyer, accountId, price, status, lotId, lotCount]
   );
 
   return res.rows[0];
@@ -245,8 +212,7 @@ function findAccountByTitle(accounts, desiredTitle) {
   if (!desiredTitle) return null;
   function normalizeForEquality(text = '') {
     return normalizeTextForMatch(String(text || ''))
-      // remove numbers and mmr/k tokens which usually encode strength
-      .replace(/\b(\d+|k|к|ммр|mmr)\b/g, '')
+      .replace(/\b\d+\b/g, '')
       .replace(/\s+/g, ' ')
       .trim();
   }

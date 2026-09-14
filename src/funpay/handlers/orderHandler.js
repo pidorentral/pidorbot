@@ -33,9 +33,9 @@ export async function handleNewOrders(orders, logger, { client, notifyAdmin }) {
 }
 
 async function processOrder(order, { client, logger, notifyAdmin }) {
-  const { funpayOrderId, buyerId, buyerUsername: buyer, price, lotId, lotCount = 1 } = order;
+  const { funpayOrderId, buyerId, buyerUsername: buyer, price, lotId } = order;
 
-  logger.info(`Order #${funpayOrderId}: processing raw payload: buyer=${buyer || 'unknown'}, buyerId=${buyerId ?? 'n/a'}, price=${price ?? 'n/a'}, lotId=${lotId ?? 'n/a'}, lotCount=${lotCount ?? 'n/a'}`);
+  logger.info(`Order #${funpayOrderId}: processing raw payload: buyer=${buyer || 'unknown'}, buyerId=${buyerId ?? 'n/a'}, price=${price ?? 'n/a'}, offerId=${lotId ?? 'n/a'}, quantity=1`);
 
   const existing = await getOrderByFunpayId(funpayOrderId);
   if (existing && existing.status === 'fulfilled') {
@@ -43,7 +43,7 @@ async function processOrder(order, { client, logger, notifyAdmin }) {
     return true;
   }
 
-  const quantity = Math.max(1, Number.isFinite(Number(lotCount)) ? Number(lotCount) : 1);
+  const quantity = 1;
   let resolvedLotId = lotId;
 
   if (!resolvedLotId) {
@@ -65,7 +65,7 @@ async function processOrder(order, { client, logger, notifyAdmin }) {
 
   if (!resolvedLotId) {
     const message = `⚠️ Заказ #${funpayOrderId}: не удалось получить ID оффера — выдача остановлена.`;
-    logger.error(`${message} | debug: buyer=${buyer || 'unknown'}, buyerId=${buyerId ?? 'n/a'}, orderPayload=${JSON.stringify({ funpayOrderId, buyer, buyerId, price, lotCount })}`);
+    logger.error(`${message} | debug: buyer=${buyer || 'unknown'}, buyerId=${buyerId ?? 'n/a'}, orderPayload=${JSON.stringify({ funpayOrderId, buyer, buyerId, price })}`);
     if (notifyAdmin) await notifyAdmin(message);
     return false;
   }
@@ -82,7 +82,6 @@ async function processOrder(order, { client, logger, notifyAdmin }) {
           price,
           status: 'paid',
           lotId: effectiveLotId,
-          lotCount: quantity,
       });
   }
 

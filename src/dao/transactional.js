@@ -14,10 +14,10 @@ export async function createOrderAndReserveAccount({
     await client.query('BEGIN');
 
     const orderRes = await client.query(
-      `INSERT INTO orders (funpay_order_id, buyer, account_id, price, status, lot_id, lot_count)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
+      `INSERT INTO orders (funpay_order_id, buyer, account_id, price, status, lot_id)
+       VALUES ($1, $2, $3, $4, $5, $6)
        RETURNING *`,
-      [funpayOrderId, buyer, accountId, price, orderStatus, null, 1]
+      [funpayOrderId, buyer, accountId, price, orderStatus, null]
     );
     const order = orderRes.rows[0];
 

@@ -23,7 +23,6 @@ test('parses new FunPay orders from trade page markup', () => {
     status: 'Paid',
     description: 'Steam account',
     lotId: null,
-    lotCount: 1,
     createdLabel: 'today',
   }]);
 });
@@ -49,12 +48,11 @@ test('ignores rating mentions in order description', () => {
     status: 'Paid',
     description: 'Dota 2 аккаунт 5к рейтинг',
     lotId: null,
-    lotCount: 1,
     createdLabel: 'today',
   }]);
 });
 
-test('ignores #1 and 1 hour as lot count when the order is a single lot', () => {
+test('ignores #1 and 1 hour as quantity indicators when the order is a single lot', () => {
   const html = `
     <div class="tc-item info">
       <div class="tc-order">#NSGQQLZC</div>
@@ -62,7 +60,7 @@ test('ignores #1 and 1 hour as lot count when the order is a single lot', () => 
       <div class="media-user-name">bambino7771</div>
       <div class="tc-price">1 ₽</div>
       <div class="tc-status">Paid</div>
-      <div class="order-desc">💖✅❗️АВТО-АРЕНДА 24/7✅【1700 MMR】✅【7000 ПОРЯДЫ】【1 ЧАС】❗️✅💖【#1】, Аренда, 2000 MMR, 7013 порядочности, 7013 вежливости, 434 матчей</div>
+      <div class="order-desc">💖✅❗️АВТО-АРЕНДА 24/7✅【7000 ПОРЯДЫ】【1 ЧАС】❗️✅💖【#1】, Аренда, 7013 порядочности, 7013 вежливости, 434 матчей</div>
       <div class="tc-date-time">today</div>
     </div>
   `;
@@ -73,14 +71,13 @@ test('ignores #1 and 1 hour as lot count when the order is a single lot', () => 
     buyerUsername: 'bambino7771',
     price: 1,
     status: 'Paid',
-    description: '💖✅❗️АВТО-АРЕНДА 24/7✅【1700 MMR】✅【7000 ПОРЯДЫ】【1 ЧАС】❗️✅💖【#1】, Аренда, 2000 MMR, 7013 порядочности, 7013 вежливости, 434 матчей',
+    description: '💖✅❗️АВТО-АРЕНДА 24/7✅【7000 ПОРЯДЫ】【1 ЧАС】❗️✅💖【#1】, Аренда, 7013 порядочности, 7013 вежливости, 434 матчей',
     lotId: null,
-    lotCount: 1,
     createdLabel: 'today',
   }]);
 });
 
-test('parses lot count from order description', () => {
+test('ignores explicit quantity words in descriptions when using the single-lot runtime model', () => {
   const html = `
     <div class="tc-item info">
       <div class="tc-order">#GHI-789</div>
@@ -101,12 +98,11 @@ test('parses lot count from order description', () => {
     status: 'Paid',
     description: 'Steam account x2',
     lotId: null,
-    lotCount: 2,
     createdLabel: 'today',
   }]);
 });
 
-test('parses lot count from Russian quantity words', () => {
+test('ignores Russian quantity words in descriptions when runtime quantity is fixed to one', () => {
   const html = `
     <div class="tc-item info">
       <div class="tc-order">#MNO-345</div>
@@ -127,7 +123,6 @@ test('parses lot count from Russian quantity words', () => {
     status: 'Paid',
     description: 'Steam account 2 лота',
     lotId: null,
-    lotCount: 2,
     createdLabel: 'today',
   }]);
 });
@@ -153,7 +148,6 @@ test('parses lot id from order link', () => {
     status: 'Paid',
     description: 'Steam account',
     lotId: 123456,
-    lotCount: 1,
     createdLabel: 'today',
   }]);
 });
@@ -179,7 +173,6 @@ test('parses lot id from lots/offer?id= URL format', () => {
     status: 'Paid',
     description: 'Steam account',
     lotId: 73721885,
-    lotCount: 1,
     createdLabel: 'today',
   }]);
 });
@@ -205,12 +198,11 @@ test('parses lot id from data-href lots/offer?id= URL format', () => {
     status: 'Paid',
     description: 'Steam account',
     lotId: 73721885,
-    lotCount: 1,
     createdLabel: 'today',
   }]);
 });
 
-test('ignores unrelated numeric values when lot count is absent', () => {
+test('ignores unrelated numeric values when there is no valid lot id', () => {
   const html = `
     <div class="tc-item info">
       <div class="tc-order">#PQR-999</div>
@@ -231,7 +223,6 @@ test('ignores unrelated numeric values when lot count is absent', () => {
     status: 'Paid',
     description: 'Steam account 4 часа 2к рейтинг',
     lotId: null,
-    lotCount: 1,
     createdLabel: 'today',
   }]);
 });

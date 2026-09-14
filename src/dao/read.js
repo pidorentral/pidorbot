@@ -32,7 +32,7 @@ export async function getOrderByFunpayId(funpayOrderId) {
   const res = await query(
     `
     SELECT id, funpay_order_id AS "funpayOrderId", buyer, account_id AS "accountId", status, price,
-           lot_id AS "lotId", lot_count AS "lotCount", created_at AS "createdAt"
+           lot_id AS "lotId", created_at AS "createdAt"
     FROM orders
     WHERE funpay_order_id = $1
     LIMIT 1
@@ -131,7 +131,7 @@ export async function getOrders({ status = null, limit = 50, offset = 0 } = {}) 
   const res = await query(
     `
     SELECT id, funpay_order_id AS "funpayOrderId", buyer, account_id AS "accountId", status, price,
-           lot_id AS "lotId", lot_count AS "lotCount", created_at AS "createdAt"
+           lot_id AS "lotId", created_at AS "createdAt"
     FROM orders
     WHERE ($1::text IS NULL OR status = $1)
     ORDER BY created_at DESC
@@ -203,7 +203,7 @@ export async function getRentalByOrderId(orderId) {
 
 export async function getOrderById(id) {
   const res = await query(
-    `SELECT id, funpay_order_id AS "funpayOrderId", buyer, account_id AS "accountId", status, price, lot_id AS "lotId", lot_count AS "lotCount", created_at AS "createdAt" FROM orders WHERE id = $1 LIMIT 1`,
+    `SELECT id, funpay_order_id AS "funpayOrderId", buyer, account_id AS "accountId", status, price, lot_id AS "lotId", created_at AS "createdAt" FROM orders WHERE id = $1 LIMIT 1`,
     [id]
   );
   return res.rows[0] || null;

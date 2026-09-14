@@ -23,8 +23,8 @@ async function main() {
 
   const debugOrder = await query(
     `
-      INSERT INTO orders (funpay_order_id, buyer, account_id, price, status, lot_count)
-      VALUES ($1, $2, $3, 0, 'paid', 1)
+      INSERT INTO orders (funpay_order_id, buyer, account_id, price, status)
+      VALUES ($1, $2, $3, 0, 'paid')
       RETURNING id
     `,
     [`debug-${Date.now()}`, buyer, accountId]

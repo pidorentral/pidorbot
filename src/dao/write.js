@@ -125,13 +125,12 @@ export async function createOrder({
   price,
   status = 'new',
   lotId = null,
-  lotCount = 1,
 }) {
   const res = await query(
-    `INSERT INTO orders (funpay_order_id, buyer, account_id, price, status, lot_id, lot_count)
-     VALUES ($1, $2, $3, $4, $5, $6, $7)
+    `INSERT INTO orders (funpay_order_id, buyer, account_id, price, status, lot_id)
+     VALUES ($1, $2, $3, $4, $5, $6)
      RETURNING *`,
-    [funpayOrderId, buyer, accountId, price, status, lotId, lotCount]
+    [funpayOrderId, buyer, accountId, price, status, lotId]
   );
 
   return res.rows[0];

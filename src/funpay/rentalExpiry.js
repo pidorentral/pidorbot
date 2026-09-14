@@ -1,4 +1,4 @@
-import crypto from 'crypto';
+import * as appCrypto from '../crypto.js';
 import { getClient, query } from '../db.js';
 import { extendActiveRental, setAccountStatus } from '../dao/write.js';
 import { deauthorizeAllDevices } from '../../steam/accountRecoverer.js';
@@ -85,7 +85,7 @@ export function extractSteamCookiesFromRawJson(rawValue) {
     if (typeof candidate !== 'string') return null;
 
     try {
-      const decrypted = crypto.decrypt ? crypto.decrypt(candidate) : null;
+      const decrypted = appCrypto.decrypt(candidate);
       if (!decrypted) return null;
       const parsed = tryParse(decrypted);
       if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {

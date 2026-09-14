@@ -107,7 +107,6 @@ if (!process.env.DATABASE_URL) {
           buyerUsername: 'same-user',
           price: 1,
           lotId: 99,
-          lotCount: 2,
           description: 'extra lot',
         },
       ], console, {

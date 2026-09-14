@@ -6,6 +6,8 @@
 import test from 'node:test';
 import assert from 'node:assert';
 import { SteamAccountRecoverer, SteamPasswordChangeError, recoverSteamAccount, extractRecoveryParams, isPasswordChangeEnabled, formatSteamError, isDeauthorizationSuccessPage, isSteamLoginPageUrl, buildSteamBrowserCookieEntries, deauthorizeAllDevices } from '../steam/accountRecoverer.js';
+import { extractSteamCookiesFromRawJson } from '../src/funpay/rentalExpiry.js';
+import { encrypt } from '../src/crypto.js';
 
 /**
  * Test: Constructor validates input
@@ -187,6 +189,26 @@ test('deauthorizeAllDevices - preserves the full Steam cookie bundle for real re
         assert.deepEqual(seenCookies, cookies);
     } finally {
         SteamAccountRecoverer.prototype._deauthorizeAllDevices = original;
+    }
+});
+
+test('extractSteamCookiesFromRawJson - decrypts encrypted mafile payloads used by cleanup', () => {
+    const previous = process.env.ENCRYPTION_KEY;
+    process.env.ENCRYPTION_KEY = '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
+
+    try {
+        const cookies = {
+            sessionid: 'session',
+            steamLoginSecure: 'secure',
+            steamRememberLogin: '1',
+        };
+        const encrypted = JSON.stringify(encrypt(JSON.stringify({ cookies })));
+
+        const result = extractSteamCookiesFromRawJson(encrypted);
+        assert.deepEqual(result, cookies);
+    } finally {
+        if (previous === undefined) delete process.env.ENCRYPTION_KEY;
+        else process.env.ENCRYPTION_KEY = previous;
     }
 });
 

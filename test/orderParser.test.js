@@ -54,6 +54,32 @@ test('ignores rating mentions in order description', () => {
   }]);
 });
 
+test('ignores #1 and 1 hour as lot count when the order is a single lot', () => {
+  const html = `
+    <div class="tc-item info">
+      <div class="tc-order">#NSGQQLZC</div>
+      <a data-href="/users/20395268/"></a>
+      <div class="media-user-name">bambino7771</div>
+      <div class="tc-price">1 ₽</div>
+      <div class="tc-status">Paid</div>
+      <div class="order-desc">💖✅❗️АВТО-АРЕНДА 24/7✅【1700 MMR】✅【7000 ПОРЯДЫ】【1 ЧАС】❗️✅💖【#1】, Аренда, 2000 MMR, 7013 порядочности, 7013 вежливости, 434 матчей</div>
+      <div class="tc-date-time">today</div>
+    </div>
+  `;
+
+  assert.deepEqual(parseNewOrders(html), [{
+    funpayOrderId: 'NSGQQLZC',
+    buyerId: 20395268,
+    buyerUsername: 'bambino7771',
+    price: 1,
+    status: 'Paid',
+    description: '💖✅❗️АВТО-АРЕНДА 24/7✅【1700 MMR】✅【7000 ПОРЯДЫ】【1 ЧАС】❗️✅💖【#1】, Аренда, 2000 MMR, 7013 порядочности, 7013 вежливости, 434 матчей',
+    lotId: null,
+    lotCount: 1,
+    createdLabel: 'today',
+  }]);
+});
+
 test('parses lot count from order description', () => {
   const html = `
     <div class="tc-item info">

@@ -116,18 +116,18 @@ function parseLotCount(html, description) {
   const text = `${html} ${description || ''}`;
   const patterns = [
     /(?:data-(?:lot|quantity|qty)=['"]?)(\d+)['"]?/i,
-    /(?:quantity|qty|кол-во)\s*[:=]?\s*(\d+)/i,
-    /(?:\b|\s)(?:x|х)\s*(\d+)\b/i,
+    /(?:\b(?:quantity|qty|кол-во)\b\s*[:=]?\s*)(\d+)/i,
+    /(?:\b(?:x|х)\s*)(\d+)\b/i,
     /(?:^|\s)(\d+)\s*(?:лот(?:а|ов)?|lot(?:s)?)(?![\p{L}\p{N}])/iu,
     /(?:^|\s)(\d+)\s*(?:шт|pcs?|items?)(?![\p{L}\p{N}])/iu,
   ];
 
   for (const pattern of patterns) {
     const match = text.match(pattern);
-    if (match) {
-      const parsed = Number(match[1]);
-      if (Number.isSafeInteger(parsed) && parsed > 0) return parsed;
-    }
+    if (!match) continue;
+
+    const parsed = Number(match[1] ?? match[0]);
+    if (Number.isSafeInteger(parsed) && parsed > 0) return parsed;
   }
 
   return 1;

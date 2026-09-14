@@ -57,10 +57,11 @@ export function createFunpayPoller({
 
       if (!initialSnapshotLoaded) {
         initialSnapshotLoaded = true;
-        logger.info(`FunPay observer started; existing new orders: ${orders.length}`);
+        logger.info('FunPay observer started');
       }
 
       if (unseenOrders.length) {
+        logger.debug(`FunPay poll: ${unseenOrders.length} new order(s) detected`);
         const processedOrderIds = await onNewOrders(unseenOrders, logger);
         const processedIds = new Set(processedOrderIds ?? unseenOrders.map((order) => order.funpayOrderId));
 
@@ -105,8 +106,8 @@ export function createFunpayPoller({
 }
 
 async function logObservedOrders(orders, logger) {
-  for (const order of orders) {
-    logger.info(`FunPay order observed: #${order.funpayOrderId} (${order.status || 'unknown status'})`);
+  if (orders.length) {
+    logger.debug(`FunPay order batch observed: ${orders.map((order) => `#${order.funpayOrderId}`).join(', ')}`);
   }
 
   return orders.map((order) => order.funpayOrderId);

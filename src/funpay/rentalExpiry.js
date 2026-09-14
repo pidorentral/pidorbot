@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import { getClient, query } from '../db.js';
 import { extendActiveRental, setAccountStatus } from '../dao/write.js';
 import { deauthorizeAllDevices } from '../../steam/accountRecoverer.js';
@@ -66,6 +67,82 @@ function isRentalReadyForCleanup(rental, now, renewalGraceMs) {
 
 function cleanError(error) {
   return String(error?.message || error || 'Steam cleanup failed').replace(/[\r\n]+/g, ' ').slice(0, 500);
+}
+
+export function extractSteamCookiesFromRawJson(rawValue) {
+  if (!rawValue) return null;
+
+  const tryParse = (value) => {
+    if (typeof value !== 'string') return value;
+    try {
+      return JSON.parse(value);
+    } catch {
+      return value;
+    }
+  };
+
+  const tryDecryptString = (candidate) => {
+    if (typeof candidate !== 'string') return null;
+
+    try {
+      const decrypted = crypto.decrypt ? crypto.decrypt(candidate) : null;
+      if (!decrypted) return null;
+      const parsed = tryParse(decrypted);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        return parsed.cookies || parsed;
+      }
+    } catch {
+      // not an encrypted payload
+    }
+
+    return null;
+  };
+
+  const parsed = tryParse(rawValue);
+  if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+    return parsed.cookies || parsed;
+  }
+
+  if (typeof parsed === 'string') {
+    const decrypted = tryDecryptString(parsed);
+    if (decrypted) return decrypted;
+  }
+
+  const decrypted = tryDecryptString(rawValue);
+  if (decrypted) return decrypted;
+
+  return null;
+}
+
+async function resolveCleanupCookies(rental, logger = console) {
+  const rawCookies = rental.sessionCookies ?? rental.session_cookies ?? null;
+
+  if (rawCookies) {
+    try {
+      const parsed = typeof rawCookies === 'string' ? JSON.parse(rawCookies) : rawCookies;
+      if (parsed?.sessionid && parsed?.steamLoginSecure) {
+        return parsed;
+      }
+    } catch {
+      logger.warn(`Rental #${rental.id}: sessionCookies exists but is not valid JSON; trying mafile fallback.`);
+    }
+  }
+
+  logger.warn(`Rental #${rental.id}: missing sessionid/steamLoginSecure in rental cookies; checking mafile for account #${rental.accountId}.`);
+
+  const result = await query(
+    `SELECT raw_json AS "rawJson" FROM mafiles WHERE account_id = $1 LIMIT 1`,
+    [rental.accountId]
+  );
+
+  const cookies = extractSteamCookiesFromRawJson(result.rows[0]?.rawJson);
+  if (cookies?.sessionid && cookies?.steamLoginSecure) {
+    logger.info(`Rental #${rental.id}: recovered Steam auth cookies from mafile for account #${rental.accountId}. Keys: ${Object.keys(cookies).join(', ')}`);
+    return cookies;
+  }
+
+  logger.error(`Rental #${rental.id}: no usable Steam session cookies found in rental row or mafile for account #${rental.accountId}.`);
+  throw new Error('Rental is missing sessionid and steamLoginSecure; manual review is required');
 }
 
 async function claimCleanup(rentalId, { renewalGraceMs, cleanupLeaseMs }) {
@@ -226,23 +303,26 @@ async function notifyRentalEnded(rental, { client, notifyAdmin, logger }) {
   }
 }
 
-async function deauthorizeRental(rental) {
+async function deauthorizeRental(rental, logger = console) {
   let cookies;
   try {
-    cookies = typeof rental.sessionCookies === 'string'
-      ? JSON.parse(rental.sessionCookies)
-      : rental.sessionCookies;
-  } catch {
-    throw new Error('Stored rental cookies are not valid JSON; manual review is required');
+    cookies = await resolveCleanupCookies(rental, logger);
+  } catch (error) {
+    if (error.message === 'Stored rental cookies are not valid JSON; manual review is required') {
+      throw error;
+    }
+    throw error;
   }
 
   if (!cookies?.sessionid || !cookies?.steamLoginSecure) {
+    logger.warn(`Rental #${rental.id}: recovered Steam cookie bundle is incomplete: keys=${Object.keys(cookies || {}).join(', ') || 'none'}`);
     throw new Error('Rental is missing sessionid and steamLoginSecure; manual review is required');
   }
 
   // Deauthorize before finalizing the rental so the renter loses Steam access first.
   // Keep the full cookie bundle, not just the two required fields: Steam auth can depend on
   // steamMachineAuth / steamRememberLogin and other browser-bound cookies during the logout flow.
+  logger.info(`Rental #${rental.id}: deauthorizing Steam sessions with cookie keys ${Object.keys(cookies).join(', ')}`);
   return deauthorizeAllDevices(cookies);
 }
 
@@ -304,7 +384,7 @@ export function createExpiryChecker({
     if (!claimed) return 'skipped';
 
     try {
-      await deauthorizeRental(claimed);
+      await deauthorizeRental(claimed, logger);
       await setAccountStatus(claimed.accountId, 'disabled');
       logger.info(`Steam devices deauthorized for rental #${claimed.id}`);
       if (notifyAdmin) {

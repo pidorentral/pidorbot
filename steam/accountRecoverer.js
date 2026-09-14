@@ -572,6 +572,16 @@ export class SteamAccountRecoverer {
 
             // Always seed the fresh cookies from the account record so the browser session
             // reflects the latest known-good auth state, regardless of profile usage.
+            const sessionid = this.cookies && this.cookies.sessionid;
+            const steamLoginSecure = this.cookies && this.cookies.steamLoginSecure;
+            console.log('Seeding browser cookies:', {
+                keys: Object.keys(this.cookies || {}),
+                sessionid_present: sessionid !== undefined && sessionid !== null,
+                sessionid_len: sessionid !== undefined && sessionid !== null ? String(sessionid).length : 0,
+                steamLoginSecure_present: steamLoginSecure !== undefined && steamLoginSecure !== null,
+                steamLoginSecure_len: steamLoginSecure !== undefined && steamLoginSecure !== null ? String(steamLoginSecure).length : 0,
+            });
+
             await context.addCookies(Object.entries(this.cookies).map(([name, value]) => ({
                 name,
                 value: String(value),
@@ -585,6 +595,8 @@ export class SteamAccountRecoverer {
                 timeout: this.timeout,
             });
 
+            console.log('Browser navigated to:', page.url());
+
             if (/\/login\//i.test(page.url()) && !headless) {
                 // Headed mode is the one-time setup path: the operator can complete Steam Guard or CAPTCHA.
                 await page.waitForURL((url) => !/\/login\//i.test(url.toString()), {
@@ -593,6 +605,7 @@ export class SteamAccountRecoverer {
             }
 
             if (/\/login\//i.test(page.url())) {
+                console.log('Detected redirect to /login/, browser session is not authenticated:', page.url());
                 const error = new SteamPasswordChangeError('Steam browser session is not authenticated for device deauthorization');
                 error.requiresManualReview = true;
                 error.responseBody = { browserPath: new URL(page.url()).pathname };

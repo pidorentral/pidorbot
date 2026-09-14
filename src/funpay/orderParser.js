@@ -112,6 +112,24 @@ export function parseLotId(html, logger = console) {
   return null;
 }
 
+// The quantity is order metadata, not part of the offer description.  Read only
+// stable data attributes or a labelled value from FunPay's order markup.
+export function parseSelectedLotsCount(html) {
+  const source = String(html || '');
+  const dataAttribute = source.match(
+    /\bdata-(?:selected-)?(?:lot(?:s)?-?count|quantity|qty)\s*=\s*(['"])(\d+)\1/i,
+  );
+  if (dataAttribute) return parseNumericValue(dataAttribute[2]);
+
+  // Handles markup such as "Количество: <span>3</span>" without depending on
+  // generated CSS class names. Do not inspect order-desc: its title may contain
+  // unrelated numbers (hours, rating, or #1).
+  const labelledValue = source.match(
+    /(?:Количество|Кол(?:-?во)?|Quantity|Lots?)\s*(?:<[^>]*>\s*){0,3}[:：]?\s*(?:<[^>]*>\s*){0,3}(\d+)\b/iu,
+  );
+  return labelledValue ? parseNumericValue(labelledValue[1]) : null;
+}
+
 function parsePrice(text) {
   if (!text) return null;
   const num = text.replace(/[^\d.,]/g, '').replace(',', '.');
@@ -143,6 +161,9 @@ export function parseNewOrders(html, logger = console) {
       status: getClassText(row, 'tc-status'),
       description,
       lotId,
+      // null deliberately reaches the handler, which applies the safe fallback
+      // and logs a warning with the order and offer identifiers.
+      selectedLotsCount: parseSelectedLotsCount(row),
       createdLabel: getClassText(row, 'tc-date-time'),
     });
   }

@@ -125,12 +125,18 @@ export async function createOrder({
   price,
   status = 'new',
   lotId = null,
+  lotCount = 1,
 }) {
+  const normalizedLotCount = Number(lotCount);
+  if (!Number.isSafeInteger(normalizedLotCount) || normalizedLotCount < 1) {
+    throw new Error('lotCount must be a positive integer');
+  }
+
   const res = await query(
-    `INSERT INTO orders (funpay_order_id, buyer, account_id, price, status, lot_id)
-     VALUES ($1, $2, $3, $4, $5, $6)
+    `INSERT INTO orders (funpay_order_id, buyer, account_id, price, status, lot_id, lot_count)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)
      RETURNING *`,
-    [funpayOrderId, buyer, accountId, price, status, lotId]
+    [funpayOrderId, buyer, accountId, price, status, lotId, normalizedLotCount]
   );
 
   return res.rows[0];
@@ -144,6 +150,20 @@ export async function getActiveAccountOffer(accountId, offerId) {
     [accountId, String(offerId)]
   );
   return res.rows[0] || null;
+}
+
+export async function getOfferBaseHours(offerId) {
+  const res = await query(
+    `SELECT hours_per_lot AS "hoursPerLot"
+       FROM account_offers
+      WHERE funpay_offer_id = $1 AND is_active = TRUE
+      ORDER BY account_id
+      LIMIT 1`,
+    [String(offerId)]
+  );
+
+  const offerBaseHours = Number(res.rows[0]?.hoursPerLot);
+  return Number.isFinite(offerBaseHours) && offerBaseHours > 0 ? offerBaseHours : null;
 }
 
 export async function bindAccountOffer(accountId, offerId, hoursPerLot) {
@@ -312,8 +332,12 @@ export async function ensureRental({
     // Подбор исключительно по тайтлу (если указан), иначе берём первый доступный
     const account = accountRes.rows[0];
     const hoursPerLot = Number(account.hoursPerLot);
-    const rentalHours = hoursPerLot * normalizedQuantity;
-    const endsAt = new Date(Date.now() + rentalHours * 60 * 60 * 1000);
+    if (!Number.isFinite(hoursPerLot) || hoursPerLot <= 0) {
+      throw new Error(`Offer ${offerId} has invalid hours_per_lot configuration`);
+    }
+    // Business calculation: each selected FunPay lot adds the offer's base hours.
+    const totalHours = hoursPerLot * normalizedQuantity;
+    const endsAt = new Date(Date.now() + totalHours * 60 * 60 * 1000);
 
     // Логируем причину выбора аккаунта
     // Создаём аренду
@@ -360,7 +384,9 @@ export async function ensureRental({
       account,
       rental: rentalRes.rows[0],
       hoursPerLot,
-      rentalHours,
+      totalHours,
+      // Compatibility for existing callers; new code should use totalHours.
+      rentalHours: totalHours,
     };
 
   } catch (err) {

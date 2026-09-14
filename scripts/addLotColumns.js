@@ -12,9 +12,10 @@ async function run() {
     await client.query('BEGIN');
 
     await client.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS lot_id TEXT`);
+    await client.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS lot_count INTEGER NOT NULL DEFAULT 1`);
 
     await client.query('COMMIT');
-    console.log('Ensured lot_id column exists on orders');
+    console.log('Ensured lot_id and lot_count columns exist on orders');
   } catch (err) {
     await client.query('ROLLBACK');
     console.error('Migration failed:', err);

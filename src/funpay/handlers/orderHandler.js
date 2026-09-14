@@ -10,8 +10,9 @@ import {
     updateOrder,
     extendActiveRental,
     getActiveAccountOffer,
+    getOfferBaseHours,
 } from "../../dao/write.js";
-import { parseLotId } from '../orderParser.js';
+import { parseLotId, parseSelectedLotsCount } from '../orderParser.js';
 import { generateSteamGuardCode } from '../../../steam/steamGuard.js';
 
 export async function handleNewOrders(orders, logger, { client, notifyAdmin }) {
@@ -33,9 +34,9 @@ export async function handleNewOrders(orders, logger, { client, notifyAdmin }) {
 }
 
 async function processOrder(order, { client, logger, notifyAdmin }) {
-  const { funpayOrderId, buyerId, buyerUsername: buyer, price, lotId } = order;
+  const { funpayOrderId, buyerId, buyerUsername: buyer, price, lotId, selectedLotsCount: parsedSelectedLotsCount } = order;
 
-  logger.info(`Order #${funpayOrderId}: processing raw payload: buyer=${buyer || 'unknown'}, buyerId=${buyerId ?? 'n/a'}, price=${price ?? 'n/a'}, offerId=${lotId ?? 'n/a'}, quantity=1`);
+  logger.info(`Order #${funpayOrderId}: processing raw payload: buyer=${buyer || 'unknown'}, buyerId=${buyerId ?? 'n/a'}, price=${price ?? 'n/a'}, offerId=${lotId ?? 'n/a'}, selectedLotsCount=${parsedSelectedLotsCount ?? 'n/a'}`);
 
   const existing = await getOrderByFunpayId(funpayOrderId);
   if (existing && existing.status === 'fulfilled') {
@@ -43,20 +44,21 @@ async function processOrder(order, { client, logger, notifyAdmin }) {
     return true;
   }
 
-  const quantity = 1;
   let resolvedLotId = lotId;
+  let resolvedSelectedLotsCount = parsedSelectedLotsCount;
 
-  if (!resolvedLotId) {
-    logger.warn(`Order #${funpayOrderId}: no lotId in trade row; trying detail-page fallback`);
+  if (!resolvedLotId || resolvedSelectedLotsCount === null || resolvedSelectedLotsCount === undefined) {
+    logger.warn(`Order #${funpayOrderId}: incomplete trade-row metadata; trying detail-page fallback`);
     for (const path of [`orders/${encodeURIComponent(funpayOrderId)}/`, `order/${encodeURIComponent(funpayOrderId)}/`, `chats/${encodeURIComponent(funpayOrderId)}/`]) {
       try {
         const detailHtml = await client.request(path);
         const detailLotId = parseLotId(detailHtml, logger);
+        const detailSelectedLotsCount = parseSelectedLotsCount(detailHtml);
         if (detailLotId) {
           resolvedLotId = detailLotId;
-          logger.info(`Order #${funpayOrderId}: resolved lotId=${detailLotId} from ${path}`);
-          break;
         }
+        if (detailSelectedLotsCount !== null) resolvedSelectedLotsCount = detailSelectedLotsCount;
+        if (resolvedLotId && resolvedSelectedLotsCount !== null && resolvedSelectedLotsCount !== undefined) break;
       } catch (err) {
         logger.warn(`Order #${funpayOrderId}: detail-page fallback failed for ${path}: ${err.message}`);
       }
@@ -71,6 +73,22 @@ async function processOrder(order, { client, logger, notifyAdmin }) {
   }
 
   const effectiveLotId = resolvedLotId;
+  const parsedLotsCount = Number(resolvedSelectedLotsCount);
+  const selectedLotsCount = Number.isSafeInteger(parsedLotsCount) && parsedLotsCount > 0
+    ? parsedLotsCount
+    : 1;
+  if (selectedLotsCount === 1 && !(Number.isSafeInteger(parsedLotsCount) && parsedLotsCount > 0)) {
+    logger.warn(`Не удалось определить selectedLotsCount для заказа ${funpayOrderId} (offer_id=${effectiveLotId}), используем 1 по умолчанию`);
+  }
+
+  // Fail before inserting an order when this offer has no valid base duration.
+  const configuredBaseHours = await getOfferBaseHours(effectiveLotId);
+  if (configuredBaseHours === null) {
+    const message = `⚠️ Заказ #${funpayOrderId}: для оффера ${effectiveLotId} не настроено корректное базовое количество часов — выдача остановлена.`;
+    logger.error(message);
+    if (notifyAdmin) await notifyAdmin(message);
+    return false;
+  }
 
   // Создаём/обновляем заказ как "paid", а не сразу "fulfilled"
   let dbOrder = existing;
@@ -82,6 +100,7 @@ async function processOrder(order, { client, logger, notifyAdmin }) {
           price,
           status: 'paid',
           lotId: effectiveLotId,
+          lotCount: selectedLotsCount,
       });
   }
 
@@ -103,9 +122,16 @@ async function processOrder(order, { client, logger, notifyAdmin }) {
       if (notifyAdmin) await notifyAdmin(message);
       return false;
     }
-    const rentalBaseHours = Number(offer.hoursPerLot);
-    const rentalHours = rentalBaseHours * quantity;
-    const extension = await extendActiveRental(existingActiveRental.id, rentalHours, {
+    const offerBaseHours = Number(offer.hoursPerLot);
+    if (!Number.isFinite(offerBaseHours) || offerBaseHours <= 0) {
+      const message = `⚠️ Заказ #${funpayOrderId}: у оффера ${effectiveLotId} некорректное базовое количество часов — выдача остановлена.`;
+      logger.error(message);
+      if (notifyAdmin) await notifyAdmin(message);
+      return false;
+    }
+    // Business calculation for an existing rental: base offer duration × selected lots.
+    const totalHours = offerBaseHours * selectedLotsCount;
+    const extension = await extendActiveRental(existingActiveRental.id, totalHours, {
       reason: `order:${funpayOrderId}`,
     });
 
@@ -113,7 +139,7 @@ async function processOrder(order, { client, logger, notifyAdmin }) {
     const message = [
       `✅ Дополнительный лот принят.`,
       ``,
-      `Время аренды продлено на ${rentalHours} часов.`,
+      `Ваша аренда продлена на ${totalHours} часов.`,
       `Новая дата окончания: ${new Date(extension.newEndsAt).toLocaleString('ru-RU', { timeZone: 'Europe/Kiev' })}`,
       ``,
       account ? `Логин: ${account.login}\nПароль: ${account.password}` : null,
@@ -124,9 +150,9 @@ async function processOrder(order, { client, logger, notifyAdmin }) {
     await updateOrder(dbOrder.id, { status: 'fulfilled' });
 
     logger.info(
-      `Order #${funpayOrderId}: extended active rental #${existingActiveRental.id} by ${rentalHours}h for buyer ${buyer}; ends_at=${new Date(extension.newEndsAt).toISOString()}`
+      `Order #${funpayOrderId}: extended active rental #${existingActiveRental.id} by ${totalHours}h for buyer ${buyer}; ends_at=${new Date(extension.newEndsAt).toISOString()}`
     );
-    if (notifyAdmin) await notifyAdmin(`✅ Заказ #${funpayOrderId}: активная аренда #${existingActiveRental.id} продлена на ${rentalHours}h для ${buyer}`);
+    if (notifyAdmin) await notifyAdmin(`✅ Заказ #${funpayOrderId}: активная аренда #${existingActiveRental.id} продлена на ${totalHours}h для ${buyer}`);
     return true;
   }
 
@@ -135,7 +161,7 @@ async function processOrder(order, { client, logger, notifyAdmin }) {
       orderId: dbOrder.id,
       nodeId,
       offerId: effectiveLotId,
-      quantity,
+      quantity: selectedLotsCount,
     });
 
   if (!reservation) {
@@ -151,10 +177,10 @@ async function processOrder(order, { client, logger, notifyAdmin }) {
       return;
   }
 
-  const { account, rental, hoursPerLot: rentalBaseHours, rentalHours } = reservation;
+  const { account, rental, hoursPerLot: offerBaseHours, totalHours } = reservation;
 
   logger.info(
-    `Order #${funpayOrderId}: reserved account #${account.id}, rentalEndsAt=${new Date(rental.ends_at).toISOString()}, durationHours=${rentalHours}`
+    `Order #${funpayOrderId}: reserved account #${account.id}, rentalEndsAt=${new Date(rental.ends_at).toISOString()}, totalHours=${totalHours}`
   );
 
   const fullAccount = await getAccountById(account.id, {
@@ -171,7 +197,7 @@ async function processOrder(order, { client, logger, notifyAdmin }) {
     `Steam Guard: ${code}`,
     ``,
     `Для получения нового кода напишите !code`,
-    quantity > 1 ? `Аренда на ${rentalHours} часов (${rentalBaseHours} × ${quantity})` : `Аренда на ${rentalBaseHours} часов`,
+    `Ваша аренда на ${totalHours} часов активирована${selectedLotsCount > 1 ? ` (${offerBaseHours} × ${selectedLotsCount})` : ''}.`,
     `Аренда до: ${new Date(rental.ends_at).toLocaleString('ru-RU', {
       timeZone: 'Europe/Kiev'
     })}`

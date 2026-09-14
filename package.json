@@ -8,6 +8,7 @@
     "db:smoke": "node --env-file=.env scripts/dbSmoke.js",
     "funpay:check": "node --env-file=.env scripts/funpayCheck.js",
     "db:create-indexes": "node --env-file=.env scripts/createIndexes.js",
+    "db:add-lot-columns": "node --env-file=.env scripts/addLotColumns.js",
     "db:encrypt-mafiles": "node --env-file=.env scripts/encryptMafilePayloads.js",
     "db:cleanup-retry": "node --env-file=.env scripts/cleanupRetryMigration.js",
     "steam:extract-cookies": "node steam/extractCookies.js"

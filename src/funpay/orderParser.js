@@ -19,35 +19,73 @@ function getBuyerId(html) {
   const match = html.match(/data-href=(['"])[^'"]*\/users\/(\d+)\/?[^'"]*\1/i);
   return match ? Number(match[2]) : null;
 }
-function parseLotId(html) {
+
+export function parseFunpayOrderIdFromUrl(rawUrl) {
+  if (typeof rawUrl !== 'string') return null;
+
+  const trimmed = rawUrl.trim();
+  if (!trimmed) return null;
+
+  let normalized = trimmed;
+  if (normalized.startsWith('//')) normalized = `https:${normalized}`;
+  if (!/^https?:\/\//i.test(normalized)) {
+    normalized = normalized.startsWith('/')
+      ? `https://funpay.com${normalized}`
+      : `https://funpay.com/${normalized}`;
+  }
+
+  try {
+    const url = new URL(normalized);
+    const orderPathMatch = url.pathname.match(/\/(?:orders?|chats?)\/(\d+)(?:\/)?$/i);
+    if (orderPathMatch) return Number(orderPathMatch[1]);
+
+    if (/\/(?:orders?|chats?)(?:\/)?$/i.test(url.pathname)) {
+      const orderIdFromQuery = ['id', 'order_id', 'orderId'].find((key) => url.searchParams.has(key));
+      if (orderIdFromQuery) {
+        const value = Number(url.searchParams.get(orderIdFromQuery));
+        if (Number.isSafeInteger(value) && value > 0) return value;
+      }
+    }
+
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function parseNumericValue(value) {
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
+export function parseLotId(html) {
   const decoded = html
     .replace(/&amp;/gi, '&')
     .replace(/&quot;/gi, '"')
     .replace(/&#39;/gi, "'")
     .replace(/&nbsp;/gi, ' ');
 
-  const queryParamMatch = decoded.match(/(?:[?&;]|\b)(?:id|offer_id|lot_id|offerId|lotId)\s*=\s*(\d+)/i);
-  if (queryParamMatch) {
-    const value = Number(queryParamMatch[1]);
-    if (Number.isSafeInteger(value) && value > 0) return value;
-  }
-
   const hrefMatches = [...decoded.matchAll(/(?:data-)?href\s*=\s*(['"])(.*?)\1/gi)];
   for (const match of hrefMatches) {
     const rawUrl = match[2];
     try {
       const url = new URL(rawUrl.startsWith('http') ? rawUrl : rawUrl.startsWith('//') ? `https:${rawUrl}` : `https://funpay.com${rawUrl}`);
-      const queryId = ['id', 'offer_id', 'lot_id', 'offerId', 'lotId']
-        .find((key) => url.searchParams.has(key));
+
+      if (parseFunpayOrderIdFromUrl(url.toString()) !== null) {
+        continue;
+      }
+
+      const queryId = ['offer_id', 'lot_id', 'offerId', 'lotId', 'id']
+        .find((key) => url.searchParams.has(key) && !/\/(?:orders?|chats?)(?:\/)?$/i.test(url.pathname));
       if (queryId) {
-        const value = Number(url.searchParams.get(queryId));
-        if (Number.isSafeInteger(value) && value > 0) return value;
+        const value = parseNumericValue(url.searchParams.get(queryId));
+        if (value !== null) return value;
       }
 
       const pathMatch = url.pathname.match(/\/(?:offer|lot|product)\/(\d+)(?:\/)?$/i);
       if (pathMatch) {
-        const value = Number(pathMatch[1]);
-        if (Number.isSafeInteger(value) && value > 0) return value;
+        const value = parseNumericValue(pathMatch[1]);
+        if (value !== null) return value;
       }
     } catch {
       // Ignore invalid href values; the literal regex fallback below still handles direct HTML attributes.
@@ -60,9 +98,9 @@ function parseLotId(html) {
     /(?:data-)?href\s*=\s*(['"])https?:\/\/[^\/]+\/offer\/(\d+)\/??\1/i,
     /(?:data-)?href\s*=\s*(['"])https?:\/\/[^\/]+\/lot\/(\d+)\/??\1/i,
     /(?:data-)?href\s*=\s*(['"])https?:\/\/[^\/]+\/product\/(\d+)\/??\1/i,
-    /(?:data-)?href\s*=\s*(['"])(?:https?:\/\/[^'"]*?)?\/lots\/(?:offer|lot)(?:\/)?\?(?:[^'"]*?[&;])?id=(\d+)\1/i,
     /(?:data-)?href\s*=\s*(['"])(?:https?:\/\/[^'"]*?)?\/lots\/(?:offer|lot)(?:\/)?\?(?:[^'"]*?[&;])?offer_id=(\d+)\1/i,
     /(?:data-)?href\s*=\s*(['"])(?:https?:\/\/[^'"]*?)?\/lots\/(?:offer|lot)(?:\/)?\?(?:[^'"]*?[&;])?lot_id=(\d+)\1/i,
+    /(?:data-)?href\s*=\s*(['"])(?:https?:\/\/[^'"]*?)?\/lots\/(?:offer|lot)(?:\/)?\?(?:[^'"]*?[&;])?id=(\d+)\1/i,
   ];
 
   for (const pattern of patterns) {

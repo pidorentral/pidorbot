@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { parseNewOrders } from '../src/funpay/orderParser.js';
+import { parseFunpayOrderIdFromUrl, parseLotId, parseNewOrders } from '../src/funpay/orderParser.js';
 
 test('parses new FunPay orders from trade page markup', () => {
   const html = `
@@ -216,6 +216,15 @@ test('ignores other numeric values when lot count is absent', () => {
     lotCount: 1,
     createdLabel: 'today',
   }]);
+});
+
+test('extracts FunPay order id from order and chat URLs without treating them as lot ids', () => {
+  assert.equal(parseFunpayOrderIdFromUrl('https://funpay.com/orders/123456/'), 123456);
+  assert.equal(parseFunpayOrderIdFromUrl('https://funpay.com/order/123456/'), 123456);
+  assert.equal(parseFunpayOrderIdFromUrl('https://funpay.com/chats/123456/'), 123456);
+  assert.equal(parseFunpayOrderIdFromUrl('https://funpay.com/posts/123456/'), null);
+  assert.equal(parseLotId('https://funpay.com/orders/123456/'), null);
+  assert.equal(parseLotId('https://funpay.com/chats/123456/'), null);
 });
 
 test('ignores items without an order number', () => {

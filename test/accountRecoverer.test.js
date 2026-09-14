@@ -5,7 +5,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert';
-import { SteamAccountRecoverer, SteamPasswordChangeError, recoverSteamAccount, extractRecoveryParams, isPasswordChangeEnabled, formatSteamError, isDeauthorizationSuccessPage } from '../steam/accountRecoverer.js';
+import { SteamAccountRecoverer, SteamPasswordChangeError, recoverSteamAccount, extractRecoveryParams, isPasswordChangeEnabled, formatSteamError, isDeauthorizationSuccessPage, isSteamLoginPageUrl, buildSteamBrowserCookieEntries } from '../steam/accountRecoverer.js';
 
 /**
  * Test: Constructor validates input
@@ -101,6 +101,23 @@ test('formatSteamError - includes safe fetch cause diagnostics only', () => {
 test('isDeauthorizationSuccessPage - rejects generic Steam management pages', () => {
     assert.equal(isDeauthorizationSuccessPage('Steam Guard settings and authorized devices'), false);
     assert.equal(isDeauthorizationSuccessPage('Successfully deauthorized all devices'), true);
+});
+
+test('isSteamLoginPageUrl - recognizes stale Steam login redirects', () => {
+    assert.equal(isSteamLoginPageUrl('https://store.steampowered.com/login/?redir=twofactor/manage'), true);
+    assert.equal(isSteamLoginPageUrl('https://store.steampowered.com/twofactor/manage'), false);
+    assert.equal(isSteamLoginPageUrl('Steam Guard settings and authorized devices'), false);
+});
+
+test('buildSteamBrowserCookieEntries - mirrors fresh Steam auth across host families', () => {
+    const entries = buildSteamBrowserCookieEntries({ sessionid: 'abc', steamLoginSecure: 'xyz' });
+    const domains = entries.map((entry) => entry.domain);
+
+    assert.equal(entries.length >= 8, true);
+    assert.equal(domains.includes('.steamcommunity.com'), true);
+    assert.equal(domains.includes('.steampowered.com'), true);
+    assert.equal(entries.some((entry) => entry.name === 'sessionid' && entry.domain === '.steamcommunity.com'), true);
+    assert.equal(entries.some((entry) => entry.name === 'steamLoginSecure' && entry.domain === '.steampowered.com'), true);
 });
 
 test('SteamAccountRecoverer - classifies authentication redirects without following them', async () => {

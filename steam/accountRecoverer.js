@@ -59,6 +59,48 @@ export function isDeauthorizationSuccessPage(text = '') {
     return /successfully.*(deauthor|log(?:ged)? out)|(?:deauthor|log(?:ged)? out).*(?:all|every)|все устройства.*(?:выйти|деавтор)/i.test(text);
 }
 
+export function isSteamLoginPageUrl(url = '') {
+    const value = String(url || '').trim();
+    if (!value) return false;
+
+    return /(?:\/login(?:\/|$)|\/auth(?:\/|$)|\/account\/login(?:\/|$)|\/login\?)/i.test(value)
+        || /(?:^|\s)(?:sign in|login|вход)(?:\s|$)/i.test(value);
+}
+
+export function buildSteamBrowserCookieEntries(cookies = {}) {
+    const domainCandidates = [
+        '.steamcommunity.com',
+        'steamcommunity.com',
+        '.steampowered.com',
+        'store.steampowered.com',
+        'help.steampowered.com',
+    ];
+
+    const seen = new Set();
+    const entries = [];
+
+    for (const [name, value] of Object.entries(cookies || {})) {
+        if (value === undefined || value === null) continue;
+        const normalizedName = String(name).trim();
+        const normalizedValue = String(value).trim();
+        if (!normalizedName || !normalizedValue) continue;
+
+        for (const domain of domainCandidates) {
+            const key = `${normalizedName}|${domain}`;
+            if (seen.has(key)) continue;
+            seen.add(key);
+            entries.push({
+                name: normalizedName,
+                value: normalizedValue,
+                domain,
+                path: '/',
+            });
+        }
+    }
+
+    return entries;
+}
+
 /**
  * Custom error class for Steam account recovery failures
  */
@@ -570,14 +612,10 @@ export class SteamAccountRecoverer {
                 context = await browser.newContext({ userAgent: this.userAgent });
             }
 
-            // Always seed the fresh cookies from the account record so the browser session
-            // reflects the latest known-good auth state, regardless of profile usage.
-            await context.addCookies(Object.entries(this.cookies).map(([name, value]) => ({
-                name,
-                value: String(value),
-                domain: '.steampowered.com',
-                path: '/',
-            })));
+            // Always seed the fresh cookies from the account record across the Steam host families
+            // used by the login and management pages. A valid session may live on both
+            // steamcommunity.com and steampowered.com, so writing only one domain is too narrow.
+            await context.addCookies(buildSteamBrowserCookieEntries(this.cookies));
 
             const page = await context.newPage();
             await page.goto('https://store.steampowered.com/twofactor/manage', {
@@ -585,17 +623,33 @@ export class SteamAccountRecoverer {
                 timeout: this.timeout,
             });
 
-            if (/\/login\//i.test(page.url()) && !headless) {
-                // Headed mode is the one-time setup path: the operator can complete Steam Guard or CAPTCHA.
-                await page.waitForURL((url) => !/\/login\//i.test(url.toString()), {
-                    timeout: 120_000,
-                });
+            const waitForStableSteamPage = async () => {
+                try {
+                    await page.waitForURL((url) => {
+                        const value = url.toString();
+                        return !isSteamLoginPageUrl(value);
+                    }, {
+                        timeout: 15_000,
+                    });
+                } catch {
+                    // Keep the final decision to the explicit login-page check below.
+                }
+            };
+
+            if (isSteamLoginPageUrl(page.url())) {
+                await waitForStableSteamPage();
             }
 
-            if (/\/login\//i.test(page.url())) {
-                const error = new SteamPasswordChangeError('Steam browser session is not authenticated for device deauthorization');
+            if (isSteamLoginPageUrl(page.url())) {
+                const reason = headless
+                    ? 'Steam browser session is expired or not authenticated; manual review is required before device deauthorization can continue.'
+                    : 'Steam browser session requires manual sign-in before device deauthorization can continue.';
+                const error = new SteamPasswordChangeError(reason);
                 error.requiresManualReview = true;
-                error.responseBody = { browserPath: new URL(page.url()).pathname };
+                error.responseBody = {
+                    browserPath: new URL(page.url()).pathname,
+                    loginRequired: true,
+                };
                 throw error;
             }
 

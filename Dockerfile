@@ -1,5 +1,5 @@
-# Node.js 18 LTS on Debian Bookworm — required for Playwright/Chromium runtime libraries
-FROM node:18-bookworm
+# Node.js 22 on Debian Bookworm — required for Playwright/Chromium runtime libraries and Playwright's Node >=20 engine requirement
+FROM node:22-bookworm
 
 # Install system dependencies required by Playwright/Chromium in headless mode
 RUN apt-get update && apt-get install -y --no-install-recommends \

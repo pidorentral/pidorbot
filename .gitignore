@@ -1,6 +1,5 @@
 .env
 
-.agents
 .vscode
 .continue
 node_modules/

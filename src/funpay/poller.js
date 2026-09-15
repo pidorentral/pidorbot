@@ -61,7 +61,7 @@ export function createFunpayPoller({
       }
 
       if (unseenOrders.length) {
-        logger.debug(`FunPay poll: ${unseenOrders.length} new order(s) detected`);
+        logger.debug?.(`FunPay poll: ${unseenOrders.length} new order(s) detected`);
         const processedOrderIds = await onNewOrders(unseenOrders, logger);
         const processedIds = new Set(processedOrderIds ?? unseenOrders.map((order) => order.funpayOrderId));
 

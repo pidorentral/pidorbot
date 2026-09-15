@@ -49,6 +49,17 @@ FUNPAY_GOLDEN_KEY=your_funpay_golden_key
 FUNPAY_POLL_INTERVAL_MS=15000
 FUNPAY_CHAT_POLL_MS=20000
 FUNPAY_POLLING_ENABLED=true
+
+RENTAL_RENEWAL_GRACE_MS=120000
+RENTAL_EXPIRY_CHECK_MS=30000
+RENTAL_CLEANUP_RETRY_INITIAL_MS=30000
+RENTAL_CLEANUP_RETRY_MAX_MS=3600000
+RENTAL_CLEANUP_LEASE_MS=75000
+
+DEBUG_RENTAL_EXPIRY=false
+ENABLE_PASSWORD_CHANGE=false
+STEAM_BROWSER_PROFILE_DIR=
+STEAM_BROWSER_HEADLESS=true
 ```
 
 3. Install dependencies:
@@ -75,6 +86,15 @@ The bot supports a secure runtime settings flow in Telegram:
 - the key is encrypted and stored in the `settings` table
 
 The project uses encrypted storage for the active secret and applies it immediately to the live FunPay client. This avoids needing to edit `.env` every time the key rotates.
+
+For local debugging only, the expiry-check script is protected by a hard gate:
+
+```bash
+$env:DEBUG_RENTAL_EXPIRY='true'
+node scripts/debugRentalExpiry.js
+```
+
+Without this flag, the script exits immediately and does not create demo rent records in the database.
 
 ## Database requirements
 
@@ -121,6 +141,12 @@ Required or commonly used variables:
 - `FUNPAY_POLL_INTERVAL_MS` — FunPay order poll interval
 - `FUNPAY_CHAT_POLL_MS` — chat polling interval
 - `FUNPAY_POLLING_ENABLED` — enable polling loop
+- `RENTAL_RENEWAL_GRACE_MS` — time window before expiry when renewal is considered
+- `RENTAL_EXPIRY_CHECK_MS` — expiry watcher interval
+- `RENTAL_CLEANUP_RETRY_INITIAL_MS` — initial cleanup retry backoff
+- `RENTAL_CLEANUP_RETRY_MAX_MS` — maximum cleanup retry backoff
+- `RENTAL_CLEANUP_LEASE_MS` — cleanup lease lifetime
+- `DEBUG_RENTAL_EXPIRY` — debug-only gate for the expiry-check script, must be set to `true` manually
 - `STEAM_BROWSER_PROFILE_DIR` — local Steam browser profile directory
 - `STEAM_BROWSER_HEADLESS` — headless browser mode
 - `ENABLE_PASSWORD_CHANGE` — optional password rotation flag

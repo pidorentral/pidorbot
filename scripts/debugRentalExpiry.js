@@ -2,6 +2,11 @@ import 'dotenv/config';
 import { createExpiryChecker } from '../src/funpay/rentalExpiry.js';
 import { query } from '../src/db.js';
 
+if (process.env.DEBUG_RENTAL_EXPIRY !== 'true') {
+  console.error('Refusing to run debugRentalExpiry.js: set DEBUG_RENTAL_EXPIRY=true to enable it.');
+  process.exit(1);
+}
+
 process.env.RENTAL_EXPIRY_CHECK_MS = '2000';
 process.env.RENTAL_DURATION_HOURS = '0.01';
 

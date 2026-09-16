@@ -268,6 +268,12 @@ test('exposes selected lots count from a FunPay trade row data attribute', () =>
   assert.equal(parseNewOrders(html)[0].selectedLotsCount, 3);
 });
 
+test('throws on malformed FunPay offer URLs instead of silently returning null', () => {
+  assert.doesNotThrow(() => parseLotId('<div>No FunPay offer here</div>'));
+  assert.throws(() => parseLotId('https://funpay.com/orders/not-a-valid-offer-id/'), /FunPay|offer/i);
+  assert.throws(() => parseLotId('<a href="https://funpay.com/lots/offer?offer_id=abc"></a>'), /FunPay|offer/i);
+});
+
 test('ignores items without an order number', () => {
   assert.deepEqual(parseNewOrders('<div class="tc-item info"><div>missing</div></div>'), []);
 });

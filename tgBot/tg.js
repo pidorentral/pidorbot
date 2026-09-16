@@ -57,47 +57,67 @@ export function parseSteamCookiesInput(rawInput) {
     return null;
   }
 
-  const tryParseJson = () => {
-    try {
-      const parsed = JSON.parse(text);
-      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-        const result = {};
-        for (const [key, value] of Object.entries(parsed)) {
-          if (value != null && String(value).length > 0) {
-            result[key] = String(value);
-          }
-        }
-        return Object.keys(result).length > 0 ? result : null;
-      }
-    } catch {
-      // fall through to cookie-header parsing
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return null;
+  }
+
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return null;
+  }
+
+  const result = {};
+  for (const [key, value] of Object.entries(parsed)) {
+    if (value === undefined || value === null) {
+      continue;
     }
-    return null;
-  };
-
-  const parsedJson = tryParseJson();
-  if (parsedJson) {
-    return parsedJson;
+    const stringValue = String(value).trim();
+    if (stringValue.length > 0) {
+      result[key] = stringValue;
+    }
   }
 
-  const entries = {};
-  const pairs = text.split(';');
-  for (const pair of pairs) {
-    const trimmed = pair.trim();
-    if (!trimmed) continue;
-    const index = trimmed.indexOf('=');
-    if (index === -1) continue;
-    const key = trimmed.slice(0, index).trim();
-    const value = trimmed.slice(index + 1).trim();
-    if (!key || !value) continue;
-    entries[key] = value;
-  }
-
-  if (!entries.sessionid && !entries.steamLoginSecure && !entries.steamRememberLogin && !entries.steamMachineAuth) {
+  if (!result.sessionid || !result.steamLoginSecure) {
     return null;
   }
 
-  return entries;
+  return result;
+}
+
+function hasWhitespace(value) {
+  return Array.from(value).some((character) => character.trim() === '');
+}
+
+export function validateSteamCookieValue(name, rawValue) {
+  const value = typeof rawValue === 'string' ? rawValue : '';
+
+  if (!value || hasWhitespace(value)) {
+    return { ok: false, message: `${name} не должно быть пустым и не должно содержать пробелы или переносы строк.` };
+  }
+
+  if (name === 'sessionid') {
+    if (value.length < 10) {
+      return { ok: false, message: '❌ sessionid слишком короткий (минимум 10 символов).\nУбедитесь, что вы скопировали полное значение.\nПопробуйте снова или нажмите «Отмена».' };
+    }
+
+    const hasOnlyAllowedCharacters = Array.from(value).every((character) => (
+      (character >= 'a' && character <= 'z')
+      || (character >= 'A' && character <= 'Z')
+      || (character >= '0' && character <= '9')
+      || character === '-'
+    ));
+    if (!hasOnlyAllowedCharacters) {
+      return { ok: false, message: '❌ sessionid содержит недопустимые символы.\nРазрешены только буквы, цифры и дефис.\nПопробуйте снова или нажмите «Отмена».' };
+    }
+  }
+
+  if (name === 'steamLoginSecure' && value.length < 20) {
+    return { ok: false, message: '❌ steamLoginSecure слишком короткий (минимум 20 символов).\nУбедитесь, что вы скопировали полное значение.\nПопробуйте снова или нажмите «Отмена».' };
+  }
+
+  return { ok: true, value };
 }
 
 export function extractSteamCookiesFromMafile(rawValue) {
@@ -791,35 +811,56 @@ export function createBot(config = getConfig()) {
       return;
     }
 
+    sessions.set(ctx.from.id, {
+      flow: 'update_cookies',
+      step: 'sessionid',
+      accountId,
+      data: {},
+      messageIds: [],
+    });
     await safeAnswerCb(ctx);
     return ctx.editMessageText(
-      `Update cookies for account #${accountId}: choose an input format.`,
+      `Update cookies for ${account.login}.\nEnter sessionid:`,
+      cookieUpdateKeyboard(accountId),
+    );
+  });
+
+  bot.action(/^acc_update_cookies_json:(\d+)$/, async (ctx) => {
+    const accountId = Number(ctx.match[1]);
+    const account = await getAccountById(accountId);
+    if (!account) {
+      await safeAnswerCb(ctx, 'Account not found.');
+      return;
+    }
+    sessions.set(ctx.from.id, {
+      flow: 'update_cookies',
+      step: 'sessionid',
+      accountId,
+      data: {},
+      messageIds: [],
+    });
+    await safeAnswerCb(ctx);
+    return ctx.editMessageText(
+      `Update cookies for ${account.login}.\nEnter sessionid:`,
+      cookieUpdateKeyboard(accountId),
+    );
+  });
+
+  bot.action(/^acc_update_cookies_header:(\d+)$/, async (ctx) => {
+    const accountId = Number(ctx.match[1]);
+    await safeAnswerCb(ctx);
+    return ctx.editMessageText(
+      'Legacy cookie-header format is no longer supported. Paste a JSON object with sessionid and steamLoginSecure only.',
       Markup.inlineKeyboard([
-        [
-          Markup.button.callback('Paste JSON', `acc_update_cookies_json:${accountId}`),
-          Markup.button.callback('Paste cookie header', `acc_update_cookies_header:${accountId}`),
-        ],
+        [Markup.button.callback('Paste JSON', `acc_update_cookies_json:${accountId}`)],
         [Markup.button.callback('Cancel', `acc_open:${accountId}`)],
       ]),
     );
   });
 
-  for (const mode of ['json', 'header']) {
-    bot.action(new RegExp(`^acc_update_cookies_${mode}:(\\d+)$`), async (ctx) => {
-      const accountId = Number(ctx.match[1]);
-      sessions.set(ctx.from.id, { flow: 'update_cookies', step: 'cookies', mode, accountId });
-      await safeAnswerCb(ctx);
-      const prompt = mode === 'json'
-        ? 'Paste Steam cookies as JSON:'
-        : 'Paste the cookie header in the format name=value; name2=value2:';
-      return ctx.editMessageText(prompt, Markup.inlineKeyboard([
-        [Markup.button.callback('Cancel', `acc_update_cookies_cancel:${accountId}`)],
-      ]));
-    });
-  }
-
   bot.action(/^acc_update_cookies_cancel:(\d+)$/, async (ctx) => {
     const accountId = Number(ctx.match[1]);
+    await cleanupCookieInputMessages(ctx, sessions.get(ctx.from.id));
     sessions.delete(ctx.from.id);
     await safeAnswerCb(ctx);
     const account = await getAccountById(accountId, { includeSecrets: true });
@@ -1009,7 +1050,7 @@ export function createBot(config = getConfig()) {
     session.step = 'cookies';
 
     await safeAnswerCb(ctx);
-    return ctx.editMessageText('Send Steam cookies as JSON or semicolon string, for example: {"sessionid":"...","steamLoginSecure":"..."}');
+    return ctx.editMessageText('Send Steam cookies as JSON only. Required keys: sessionid and steamLoginSecure. Example: {"sessionid":"...","steamLoginSecure":"..."}');
   });
 
   bot.action('add_acc_cookies_skip', async (ctx) => {
@@ -1033,25 +1074,39 @@ export function createBot(config = getConfig()) {
     }
 
     if (session?.flow === 'update_cookies') {
-      const cookies = parseSteamCookiesInput(ctx.message?.text?.trim());
-      if (!cookies?.sessionid || !cookies?.steamLoginSecure) {
-        return ctx.reply('Invalid cookies. Both sessionid and steamLoginSecure are required.');
+      const text = ctx.message?.text || '';
+      session.messageIds ??= [];
+      if (ctx.message?.message_id) {
+        session.messageIds.push(ctx.message.message_id);
+      }
+
+      const fieldName = session.step === 'sessionid' ? 'sessionid' : 'steamLoginSecure';
+      const validation = validateSteamCookieValue(fieldName, text);
+      if (!validation.ok) {
+        return ctx.reply(validation.message, cookieUpdateKeyboard(session.accountId));
+      }
+
+      session.data[fieldName] = validation.value;
+      if (session.step === 'sessionid') {
+        session.step = 'steamLoginSecure';
+        return ctx.reply('Enter steamLoginSecure:', cookieUpdateKeyboard(session.accountId));
       }
 
       try {
         await showTyping(ctx);
+        const cookies = {
+          sessionid: session.data.sessionid,
+          steamLoginSecure: session.data.steamLoginSecure,
+        };
         await updateMafileCookies(session.accountId, cookies);
         await setAccountStatus(session.accountId, 'available');
+        await cleanupCookieInputMessages(ctx, session);
         sessions.delete(ctx.from.id);
-        const updatedAccount = await getAccountUiModel(await getAccountById(session.accountId));
-        return ctx.reply([
-          '✅ Cookies updated',
-          `sessionid: ${cookies.sessionid ? 'present' : 'missing'}`,
-          `steamLoginSecure: ${cookies.steamLoginSecure ? 'present' : 'missing'}`,
-          `steamMachineAuth: ${cookies.steamMachineAuth ? 'present' : 'missing'}`,
-          '',
-          'Account enabled.',
-        ].join('\n'), accountCardKeyboard(updatedAccount));
+        const updatedAccount = await getAccountById(session.accountId, { includeSecrets: true });
+        return ctx.reply(
+          `✅ Cookies updated for account ${updatedAccount.login}`,
+          accountCardKeyboard(await getAccountUiModel(updatedAccount)),
+        );
       } catch (err) {
         return ctx.reply(uiError('update cookies', err, 'Failed to update cookies. Please check the values and try again.'));
       }
@@ -1513,7 +1568,7 @@ function accountCardKeyboard(account) {
     ],
     [
       ...(canTestRecovery ? [Markup.button.callback('Test recovery', `acc_test_recovery:${account.id}`)] : []),
-      ...(account.status === 'disabled' ? [Markup.button.callback('Update cookies', `acc_update_cookies:${account.id}`)] : []),
+      Markup.button.callback('Update cookies', `acc_update_cookies:${account.id}`),
       Markup.button.callback(disableButtonLabel, `acc_disable:${account.id}`),
     ],
     [
@@ -1592,6 +1647,23 @@ function accountsListKeyboard(accounts, activeFilter = 'all') {
 // /add_acc
 
 const sessions = new Map();
+
+function cookieUpdateKeyboard(accountId) {
+  return Markup.inlineKeyboard([
+    [Markup.button.callback('❌ Cancel', `acc_update_cookies_cancel:${accountId}`)],
+  ]);
+}
+
+// Telegram may reject deletion when the bot lacks permission or the message is already gone.
+async function cleanupCookieInputMessages(ctx, session) {
+  for (const messageId of session?.messageIds || []) {
+    try {
+      await ctx.telegram.deleteMessage(ctx.chat.id, messageId);
+    } catch {
+      // Best effort only: never block cookie persistence because cleanup failed.
+    }
+  }
+}
 
 function formatAddAccountConfirm(data) {
   return [

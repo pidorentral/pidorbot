@@ -152,14 +152,24 @@ export async function getActiveAccountOffer(accountId, offerId) {
   return res.rows[0] || null;
 }
 
-export async function getOfferBaseHours(offerId) {
+export async function getOfferBaseHours(offerId, accountId = null) {
+  const boundAccountId = accountId == null ? null : Number(accountId);
+  const values = [String(offerId)];
+  const accountClause = boundAccountId != null && Number.isSafeInteger(boundAccountId) && boundAccountId > 0
+    ? ' AND account_id = $2'
+    : '';
+
+  if (accountClause) {
+    values.push(boundAccountId);
+  }
+
   const res = await query(
-    `SELECT hours_per_lot AS "hoursPerLot"
+    `SELECT hours_per_lot AS "hoursPerLot", account_id AS "accountId", created_at AS "createdAt"
        FROM account_offers
-      WHERE funpay_offer_id = $1 AND is_active = TRUE
-      ORDER BY account_id
+      WHERE funpay_offer_id = $1 AND is_active = TRUE${accountClause}
+      ORDER BY created_at DESC, account_id DESC
       LIMIT 1`,
-    [String(offerId)]
+    values
   );
 
   const offerBaseHours = Number(res.rows[0]?.hoursPerLot);

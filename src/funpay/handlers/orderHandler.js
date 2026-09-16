@@ -3,6 +3,7 @@ import {
     getOrderByFunpayId,
     getActiveRentalByBuyer,
 } from '../../dao/read.js';
+import { query } from '../../db.js';
 
 import {
     createOrder,
@@ -31,6 +32,60 @@ export async function handleNewOrders(orders, logger, { client, notifyAdmin }) {
   }
 
   return processedOrderIds;
+}
+
+function normalizeOfferId(value, { funpayOrderId, logger, notifyAdmin } = {}) {
+  const raw = value == null ? '' : String(value).trim();
+  if (!raw) {
+    const message = `⚠️ Заказ #${funpayOrderId}: не удалось извлечь valid offer_id из FunPay-данных — выдача остановлена.`;
+    logger?.error?.(message);
+    if (notifyAdmin) void notifyAdmin(message);
+    throw new Error(message);
+  }
+
+  const normalized = Number(raw);
+  if (!Number.isSafeInteger(normalized) || normalized <= 0) {
+    const message = `⚠️ Заказ #${funpayOrderId}: получен невалидный offer_id (${raw}) — выдача остановлена.`;
+    logger?.error?.(message);
+    if (notifyAdmin) void notifyAdmin(message);
+    throw new Error(message);
+  }
+
+  return String(normalized);
+}
+
+async function getOfferBindingAudit(offerId) {
+  try {
+    const result = await query(
+      `SELECT account_id AS "accountId",
+              funpay_offer_id AS "offerId",
+              hours_per_lot AS "hoursPerLot",
+              is_active AS "isActive",
+              created_at AS "createdAt"
+         FROM account_offers
+        WHERE funpay_offer_id = $1
+        ORDER BY created_at DESC, account_id DESC
+        LIMIT 10`,
+      [String(offerId)]
+    );
+
+    return result.rows;
+  } catch (error) {
+    return [{ error: String(error?.message || error || 'bind-audit-failed') }];
+  }
+}
+
+function buildOfferAuditContext({ funpayOrderId, buyer, buyerId, price, resolvedLotId, effectiveLotId, selectedLotsCount, bindingAudit }) {
+  return {
+    funpayOrderId,
+    buyer,
+    buyerId,
+    price,
+    resolvedLotId,
+    effectiveLotId,
+    selectedLotsCount,
+    bindingAudit,
+  };
 }
 
 async function processOrder(order, { client, logger, notifyAdmin }) {
@@ -65,14 +120,13 @@ async function processOrder(order, { client, logger, notifyAdmin }) {
     }
   }
 
-  if (!resolvedLotId) {
-    const message = `⚠️ Заказ #${funpayOrderId}: не удалось получить ID оффера — выдача остановлена.`;
-    logger.error(`${message} | debug: buyer=${buyer || 'unknown'}, buyerId=${buyerId ?? 'n/a'}, orderPayload=${JSON.stringify({ funpayOrderId, buyer, buyerId, price })}`);
-    if (notifyAdmin) await notifyAdmin(message);
+  let effectiveLotId;
+  try {
+    effectiveLotId = normalizeOfferId(resolvedLotId, { funpayOrderId, logger, notifyAdmin });
+  } catch (error) {
+    logger.error(`${error.message} | debug: buyer=${buyer || 'unknown'}, buyerId=${buyerId ?? 'n/a'}, orderPayload=${JSON.stringify({ funpayOrderId, buyer, buyerId, price })}`);
     return false;
   }
-
-  const effectiveLotId = resolvedLotId;
   const parsedLotsCount = Number(resolvedSelectedLotsCount);
   const selectedLotsCount = Number.isSafeInteger(parsedLotsCount) && parsedLotsCount > 0
     ? parsedLotsCount
@@ -84,9 +138,20 @@ async function processOrder(order, { client, logger, notifyAdmin }) {
   // Fail before inserting an order when this offer has no valid base duration.
   const configuredBaseHours = await getOfferBaseHours(effectiveLotId);
   if (configuredBaseHours === null) {
+    const bindingAudit = await getOfferBindingAudit(effectiveLotId);
+    const auditContext = buildOfferAuditContext({
+      funpayOrderId,
+      buyer,
+      buyerId,
+      price,
+      resolvedLotId: resolvedLotId ?? null,
+      effectiveLotId,
+      selectedLotsCount,
+      bindingAudit,
+    });
     const message = `⚠️ Заказ #${funpayOrderId}: для оффера ${effectiveLotId} не настроено корректное базовое количество часов — выдача остановлена.`;
-    logger.error(message);
-    if (notifyAdmin) await notifyAdmin(message);
+    logger.error(`${message} | offerAudit=${JSON.stringify(auditContext)}`);
+    if (notifyAdmin) await notifyAdmin(`${message} | offerAudit=${JSON.stringify(auditContext)}`);
     return false;
   }
 

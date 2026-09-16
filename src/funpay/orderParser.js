@@ -59,7 +59,30 @@ function parseNumericValue(value) {
 }
 
 export function parseLotId(html, logger = console) {
-  const decoded = html
+  const input = String(html || '').trim();
+  if (input && /^https?:\/\//i.test(input)) {
+    try {
+      const url = new URL(input);
+      const orderPathMatch = url.pathname.match(/\/(?:orders?|chats?)\/(\d+)(?:\/)?$/i);
+      if (orderPathMatch) {
+        return null;
+      }
+
+      const invalidOfferPath = url.pathname.match(/\/(?:orders?|chats?|offer|lot|product|lots)(?:\/)?(?:[^/?#]+)?(?:\/)?$/i);
+      if (invalidOfferPath && !/\/(?:offer|lot|product)\/(\d+)(?:\/)?$/i.test(url.pathname) && !/\/(?:lots)\/(?:offer|lot)\?(?:.*)?(?:offer_id|lot_id|id)=(\d+)/i.test(url.toString())) {
+        const message = `Malformed FunPay offer URL: ${url.toString()}`;
+        logger?.error?.(message);
+        throw new Error(message);
+      }
+    } catch (error) {
+      if (error instanceof Error && /Malformed FunPay offer URL/.test(error.message)) {
+        throw error;
+      }
+      // If the direct string is not a valid URL, fallback to HTML parsing below.
+    }
+  }
+
+  const decoded = input
     .replace(/&amp;/gi, '&')
     .replace(/&quot;/gi, '"')
     .replace(/&#39;/gi, "'")
@@ -69,7 +92,10 @@ export function parseLotId(html, logger = console) {
   for (const match of hrefMatches) {
     const rawUrl = match[2];
     try {
-      const url = new URL(rawUrl.startsWith('http') ? rawUrl : rawUrl.startsWith('//') ? `https:${rawUrl}` : `https://funpay.com${rawUrl}`);
+      const normalized = rawUrl.trim();
+      if (!normalized) continue;
+
+      const url = new URL(normalized.startsWith('http') ? normalized : normalized.startsWith('//') ? `https:${normalized}` : `https://funpay.com${normalized}`);
 
       if (parseFunpayOrderIdFromUrl(url.toString()) !== null) {
         continue;
@@ -78,17 +104,36 @@ export function parseLotId(html, logger = console) {
       const queryId = ['offer_id', 'lot_id', 'offerId', 'lotId', 'id']
         .find((key) => url.searchParams.has(key) && !/\/(?:orders?|chats?)(?:\/)?$/i.test(url.pathname));
       if (queryId) {
-        const value = parseNumericValue(url.searchParams.get(queryId));
-        if (value !== null) return value;
+        const rawValue = String(url.searchParams.get(queryId) ?? '').trim();
+        if (!/^\d+$/.test(rawValue)) {
+          const message = `Invalid FunPay offer id in URL: ${url.toString()}`;
+          logger?.error?.(message);
+          throw new Error(message);
+        }
+        return Number(rawValue);
       }
 
       const pathMatch = url.pathname.match(/\/(?:offer|lot|product)\/(\d+)(?:\/)?$/i);
       if (pathMatch) {
-        const value = parseNumericValue(pathMatch[1]);
-        if (value !== null) return value;
+        return Number(pathMatch[1]);
       }
-    } catch {
-      // Ignore invalid href values; the literal regex fallback below still handles direct HTML attributes.
+
+      if (/(?:\/)(?:offer|lot|product|lots)(?:\/|$)/i.test(url.pathname) || /(?:\/)(?:orders?|chats?)(?:\/|$)/i.test(url.pathname)) {
+        const numericPart = url.pathname.match(/\d+/);
+        if (numericPart) {
+          return Number(numericPart[0]);
+        }
+        const message = `Malformed FunPay offer URL: ${url.toString()}`;
+        logger?.error?.(message);
+        throw new Error(message);
+      }
+    } catch (error) {
+      const targetUrl = String(match[2] || '').trim();
+      if (error instanceof Error && /Invalid FunPay offer id in URL|Malformed FunPay offer URL|Failed to parse FunPay offer id/.test(error.message)) {
+        logger?.error?.(`FunPay offer parsing failed for URL "${targetUrl}": ${error.message}`);
+        throw error;
+      }
+      logger?.debug?.(`Ignoring invalid href while parsing lot id: ${targetUrl}`);
     }
   }
 
@@ -105,7 +150,22 @@ export function parseLotId(html, logger = console) {
 
   for (const pattern of patterns) {
     const match = html.match(pattern) || decoded.match(pattern);
-    if (match) return Number(match[2] || match[1]);
+    if (match) {
+      const rawValue = String(match[2] || match[1] || '').trim();
+      if (!/^\d+$/.test(rawValue)) {
+        const message = `Invalid FunPay offer id literal in markup: ${rawValue}`;
+        logger?.error?.(message);
+        throw new Error(message);
+      }
+      return Number(rawValue);
+    }
+  }
+
+  const containsOfferPatternMarker = /(\/lots\/(?:offer|lot)|\/offer\/|\/lot\/|\/product\/|offer_id=|lot_id=|data-.*offer-id)/i.test(decoded);
+  if (containsOfferPatternMarker) {
+    const message = `Malformed FunPay offer markup: ${String(html || '').slice(0, 500).replace(/\s+/g, ' ').trim()}`;
+    logger?.error?.(message);
+    throw new Error(message);
   }
 
   logger?.debug?.(`FunPay lot detection failed; sample=${String(html || '').slice(0, 600).replace(/\s+/g, ' ').trim()}`);

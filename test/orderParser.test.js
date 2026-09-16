@@ -268,6 +268,13 @@ test('exposes selected lots count from a FunPay trade row data attribute', () =>
   assert.equal(parseNewOrders(html)[0].selectedLotsCount, 3);
 });
 
+test('prefers the full offer id over an internal lot id', () => {
+  assert.equal(
+    parseLotId('<div data-lot-id="7" data-offer-id="77300004"></div>'),
+    77300004,
+  );
+});
+
 test('throws on malformed FunPay offer URLs instead of silently returning null', () => {
   assert.doesNotThrow(() => parseLotId('<div>No FunPay offer here</div>'));
   assert.throws(() => parseLotId('https://funpay.com/orders/not-a-valid-offer-id/'), /FunPay|offer/i);

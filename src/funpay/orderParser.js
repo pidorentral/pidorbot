@@ -138,7 +138,6 @@ export function parseLotId(html, logger = console) {
   }
 
   const patterns = [
-    /(?:data-)?lot-id\s*=\s*(['"])(\d+)\1/i,
     /(?:data-)?offer-id\s*=\s*(['"])(\d+)\1/i,
     /(?:data-)?href\s*=\s*(['"])https?:\/\/[^\/]+\/offer\/(\d+)\/??\1/i,
     /(?:data-)?href\s*=\s*(['"])https?:\/\/[^\/]+\/lot\/(\d+)\/??\1/i,
@@ -146,6 +145,7 @@ export function parseLotId(html, logger = console) {
     /(?:data-)?href\s*=\s*(['"])(?:https?:\/\/[^'"]*?)?\/lots\/(?:offer|lot)(?:\/)?\?(?:[^'"]*?[&;])?offer_id=(\d+)\1/i,
     /(?:data-)?href\s*=\s*(['"])(?:https?:\/\/[^'"]*?)?\/lots\/(?:offer|lot)(?:\/)?\?(?:[^'"]*?[&;])?lot_id=(\d+)\1/i,
     /(?:data-)?href\s*=\s*(['"])(?:https?:\/\/[^'"]*?)?\/lots\/(?:offer|lot)(?:\/)?\?(?:[^'"]*?[&;])?id=(\d+)\1/i,
+    /(?:data-)?lot-id\s*=\s*(['"])(\d+)\1/i,
   ];
 
   for (const pattern of patterns) {

@@ -1,8 +1,30 @@
+import UserAgent from 'user-agents';
 import { query } from '../db.js';
 import * as crypto from '../crypto.js';
 import { parseNewOrders } from './orderParser.js';
 
 const FUNPAY_URL = 'https://funpay.com/';
+const FALLBACK_FUNPAY_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
+
+function generateDesktopChromeWindowsUserAgent() {
+  for (let attempt = 0; attempt < 25; attempt += 1) {
+    const candidate = new UserAgent({
+      deviceCategory: 'desktop',
+      platform: 'Win32',
+    }).toString();
+
+    if (/Chrome\//i.test(candidate) && /\(Windows NT/i.test(candidate) && !/Mobile/i.test(candidate)) {
+      return candidate;
+    }
+  }
+
+  return FALLBACK_FUNPAY_USER_AGENT;
+}
+
+function normalizeUserAgent(value) {
+  const candidate = typeof value === 'string' ? value.trim() : '';
+  return candidate || generateDesktopChromeWindowsUserAgent();
+}
 
 export class FunpayAuthError extends Error {
   constructor(message = 'FunPay session is not authorized') {
@@ -93,6 +115,57 @@ export async function setGoldenKey(value) {
   );
 
   return key;
+}
+
+export async function getProxyUrl() {
+  const tableName = await resolveSettingsTable();
+
+  const result = await query(
+    `SELECT value FROM ${tableName} WHERE key = $1 LIMIT 1`,
+    ['FUNPAY_PROXY_URL'],
+  );
+
+  const rawValue = result.rows[0]?.value;
+  const value = typeof rawValue === 'string'
+    ? rawValue
+    : rawValue == null
+      ? null
+      : JSON.stringify(rawValue);
+
+  if (!value) {
+    return null;
+  }
+
+  try {
+    return crypto.decrypt(value);
+  } catch {
+    return value;
+  }
+}
+
+export async function setProxyUrl(value) {
+  const raw = String(value ?? '').trim();
+  if (!raw) {
+    throw new Error('FUNPAY_PROXY_URL cannot be empty');
+  }
+
+  const tableName = await resolveSettingsTable();
+  const encrypted = crypto.encrypt(raw);
+  const jsonValue = JSON.stringify(encrypted);
+
+  await query(
+    `INSERT INTO ${tableName} (key, value, updated_at)
+     VALUES ($1, $2::jsonb, NOW())
+     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()`,
+    ['FUNPAY_PROXY_URL', jsonValue],
+  );
+
+  return raw;
+}
+
+export async function clearProxyUrl() {
+  const tableName = await resolveSettingsTable();
+  await query(`DELETE FROM ${tableName} WHERE key = $1`, ['FUNPAY_PROXY_URL']);
 }
 
 function decodeHtml(value) {
@@ -186,10 +259,17 @@ function findNodeIdByUsername(html, username) {
 }
 
 export class FunpayClient {
-  constructor({ goldenKey = null, fetchImpl = globalThis.fetch } = {}) {
+  constructor({
+    goldenKey = null,
+    fetchImpl = globalThis.fetch,
+    userAgent = process.env.FUNPAY_USER_AGENT,
+    proxyUrl = process.env.FUNPAY_PROXY_URL || process.env.HTTPS_PROXY || process.env.HTTP_PROXY || null,
+  } = {}) {
     if (typeof fetchImpl !== 'function') throw new Error('A fetch implementation is required');
     this.goldenKey = goldenKey || '';
     this.fetch = fetchImpl;
+    this.userAgent = normalizeUserAgent(userAgent || process.env.FUNPAY_USER_AGENT || generateDesktopChromeWindowsUserAgent());
+    this.proxyUrl = typeof proxyUrl === 'string' && proxyUrl.trim() ? proxyUrl.trim() : null;
     this._appData = null;
     this.cookies = new Map();
   }
@@ -206,6 +286,33 @@ export class FunpayClient {
     this.goldenKey = await setGoldenKey(value);
     this.cookies.set('golden_key', this.goldenKey);
     return this.goldenKey;
+  }
+
+  async ensureProxyUrl() {
+    if (this.proxyUrl) {
+      return this.proxyUrl;
+    }
+
+    try {
+      const storedProxy = await getProxyUrl();
+      this.proxyUrl = storedProxy || null;
+      return this.proxyUrl;
+    } catch {
+      this.proxyUrl = null;
+      return null;
+    }
+  }
+
+  async setProxyUrl(value) {
+    const nextValue = value == null || String(value).trim() === '' ? null : await setProxyUrl(value);
+    this.proxyUrl = nextValue || null;
+    return this.proxyUrl;
+  }
+
+  async clearProxyUrl() {
+    await clearProxyUrl();
+    this.proxyUrl = null;
+    return null;
   }
 
   _buildCookieHeader() {
@@ -225,13 +332,16 @@ export class FunpayClient {
 
   async _requestResponse(path = '', options = {}) {
     await this.ensureGoldenKey();
-    const { headers = {}, ...requestOptions } = options;
+    const { headers = {}, proxy, ...requestOptions } = options;
+    const storedProxy = await this.ensureProxyUrl();
+    const effectiveProxy = proxy || storedProxy || this.proxyUrl;
     const response = await this.fetch(new URL(path, FUNPAY_URL), {
       ...requestOptions,
+      ...(effectiveProxy ? { proxy: effectiveProxy } : {}),
       redirect: 'follow',
       headers: {
         Accept: 'text/html,application/xhtml+xml',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+        'User-Agent': headers['User-Agent'] || this.userAgent,
         Cookie: this._buildCookieHeader(),
         ...headers,
       },
@@ -364,7 +474,7 @@ export class FunpayClient {
       headers: {
         Accept: 'application/json',
         'Content-Type': 'application/x-www-form-urlencoded',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+        'User-Agent': this.userAgent,
         Cookie: this._buildCookieHeader(),
         'X-Requested-With': 'XMLHttpRequest',
         Origin: FUNPAY_URL,

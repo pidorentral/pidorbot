@@ -38,6 +38,25 @@ test('refreshes CSRF token from fresh app data on each request', async () => {
   assert.equal(callCount, 2);
 });
 
+test('uses configured User-Agent and proxy metadata for requests', async () => {
+  let options;
+  const client = new FunpayClient({
+    goldenKey: 'test-key',
+    userAgent: 'Custom UA/1.0',
+    proxyUrl: 'http://proxy.internal:8080',
+    fetchImpl: async (_url, requestOptions) => {
+      options = requestOptions;
+      return new Response('ok', { status: 200 });
+    },
+  });
+
+  await client.request('health');
+
+  assert.equal(client.userAgent, 'Custom UA/1.0');
+  assert.equal(options.headers['User-Agent'], 'Custom UA/1.0');
+  assert.equal(options.proxy, 'http://proxy.internal:8080');
+});
+
 test('throws a dedicated rate-limit error on FunPay 429 responses', async () => {
   const client = new FunpayClient({
     goldenKey: 'test-key',

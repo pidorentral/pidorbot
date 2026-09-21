@@ -30,7 +30,7 @@ import {
 import { parseMafile } from '../steam/mafile.js';
 import { generateSteamGuardCode } from '../steam/steamGuard.js';
 import * as crypto from '../src/crypto.js';
-import { getGoldenKey, setGoldenKey } from '../src/funpay/client.js';
+import { getGoldenKey, setGoldenKey, getProxyUrl, setProxyUrl, clearProxyUrl } from '../src/funpay/client.js';
 
 const COMMANDS = [
   { command: 'stats', description: 'Summary: accounts, rentals, orders' },
@@ -299,6 +299,26 @@ function formatCleanupStatus(rental) {
   return '⏳ pending';
 }
 
+function formatProxyDisplay(proxyValue) {
+  if (typeof proxyValue !== 'string') {
+    return 'not configured';
+  }
+
+  const value = proxyValue.trim();
+  if (!value) {
+    return 'not configured';
+  }
+
+  try {
+    const parsed = new URL(value);
+    return parsed.hostname || parsed.host || value;
+  } catch {
+    const withoutScheme = value.replace(/^.*:\/\//, '').replace(/^[^@]+@/, '');
+    const hostAndPort = withoutScheme.split('/')[0];
+    return hostAndPort.replace(/:\d+$/, '');
+  }
+}
+
 async function showSettings(ctx) {
   let currentKey = 'not configured';
   try {
@@ -308,13 +328,28 @@ async function showSettings(ctx) {
     // keep the safe fallback above
   }
 
+  let currentProxy = 'not configured';
+  let hasProxy = false;
+  try {
+    const proxy = await getProxyUrl();
+    if (proxy) {
+      hasProxy = true;
+      currentProxy = formatProxyDisplay(proxy);
+    }
+  } catch {
+    // keep the safe fallback above
+  }
+
+  const actions = [
+    [Markup.button.callback('Update FunPay key', 'settings_update_funpay_key')],
+    [Markup.button.callback('Update FunPay proxy', 'settings_update_funpay_proxy')],
+    [Markup.button.callback('Main menu', 'main_menu')],
+  ];
+
   await answer(
     ctx,
-    ['Settings', '', `FunPay key: ${currentKey}`, '', 'Update the active key securely in the database.'].join('\n'),
-    Markup.inlineKeyboard([
-      [Markup.button.callback('Update FunPay key', 'settings_update_funpay_key')],
-      [Markup.button.callback('Main menu', 'main_menu')],
-    ]),
+    ['Settings', '', `FunPay key: ${currentKey}`, `Proxy: ${currentProxy}`, '', 'Update the active key or proxy securely in the database.'].join('\n'),
+    Markup.inlineKeyboard(actions),
   );
 }
 
@@ -420,6 +455,28 @@ export function createBot(config = getConfig()) {
         [Markup.button.callback('Cancel', 'settings')],
       ]),
     );
+  });
+  bot.action('settings_update_funpay_proxy', async (ctx) => {
+    sessions.set(ctx.from.id, { flow: 'update_funpay_proxy', step: 'proxy' });
+    await safeAnswerCb(ctx);
+    return ctx.editMessageText(
+      'Send the new FunPay proxy URL. Example: http://login:password@95.135.50.108:50100. Type remove to delete it.',
+      Markup.inlineKeyboard([
+        [Markup.button.callback('Cancel', 'settings')],
+      ]),
+    );
+  });
+  bot.action('settings_remove_funpay_proxy', async (ctx) => {
+    await safeAnswerCb(ctx);
+    try {
+      await clearProxyUrl();
+      if (globalThis.__FUNPAY_CLIENT__ && typeof globalThis.__FUNPAY_CLIENT__.clearProxyUrl === 'function') {
+        await globalThis.__FUNPAY_CLIENT__.clearProxyUrl();
+      }
+      return ctx.editMessageText('FunPay proxy removed successfully.', mainMenu());
+    } catch (err) {
+      return ctx.editMessageText(`Failed to remove FunPay proxy: ${err.message || err}`, mainMenu());
+    }
   });
   bot.action('claim_review', startClaimReview);
   bot.action('reviews', showReviews);
@@ -1188,6 +1245,36 @@ export function createBot(config = getConfig()) {
       }
     }
 
+    if (session?.flow === 'update_funpay_proxy') {
+      const text = ctx.message?.text?.trim();
+      const proxyInput = text?.replace(/^proxy\s*[:=]?\s*/i, '').trim();
+      const normalized = (proxyInput || '').toLowerCase();
+
+      if (!proxyInput || ['remove', 'delete', 'clear', 'none', 'null'].includes(normalized)) {
+        try {
+          await clearProxyUrl();
+          if (globalThis.__FUNPAY_CLIENT__ && typeof globalThis.__FUNPAY_CLIENT__.clearProxyUrl === 'function') {
+            await globalThis.__FUNPAY_CLIENT__.clearProxyUrl();
+          }
+          sessions.delete(ctx.from.id);
+          return ctx.reply('FunPay proxy removed successfully.', mainMenu());
+        } catch (err) {
+          return ctx.reply(uiError('remove FunPay proxy', err, 'Failed to remove FunPay proxy. Please try again.'));
+        }
+      }
+
+      try {
+        const nextProxy = await setProxyUrl(proxyInput);
+        if (globalThis.__FUNPAY_CLIENT__ && typeof globalThis.__FUNPAY_CLIENT__.setProxyUrl === 'function') {
+          await globalThis.__FUNPAY_CLIENT__.setProxyUrl(nextProxy);
+        }
+        sessions.delete(ctx.from.id);
+        return ctx.reply('FunPay proxy updated successfully and applied. Use /settings to verify it.', mainMenu());
+      } catch (err) {
+        return ctx.reply(uiError('update FunPay proxy', err, 'Failed to update FunPay proxy. Please try again.'));
+      }
+    }
+
     if (session?.flow === 'claim_review') {
       const text = ctx.message?.text?.trim();
       if (!text) return ctx.reply('Send text value');
@@ -1803,6 +1890,35 @@ async function continueAddAccount(ctx, session) {
       return ctx.reply('FunPay golden_key updated successfully and applied. Use /settings to verify it.', mainMenu());
     } catch (err) {
       return ctx.reply(uiError('update FunPay key', err, 'Failed to update FunPay key. Please try again.'));
+    }
+  }
+
+  if (session.flow === 'update_funpay_proxy') {
+    const rawProxy = text.trim().replace(/^proxy\s*[:=]?\s*/i, '').trim();
+    const normalized = rawProxy.toLowerCase();
+
+    if (!rawProxy || ['remove', 'delete', 'clear', 'none', 'null'].includes(normalized)) {
+      try {
+        await clearProxyUrl();
+        if (globalThis.__FUNPAY_CLIENT__ && typeof globalThis.__FUNPAY_CLIENT__.clearProxyUrl === 'function') {
+          await globalThis.__FUNPAY_CLIENT__.clearProxyUrl();
+        }
+        sessions.delete(ctx.from.id);
+        return ctx.reply('FunPay proxy removed successfully.', mainMenu());
+      } catch (err) {
+        return ctx.reply(uiError('remove FunPay proxy', err, 'Failed to remove FunPay proxy. Please try again.'));
+      }
+    }
+
+    try {
+      const nextProxy = await setProxyUrl(rawProxy);
+      if (globalThis.__FUNPAY_CLIENT__ && typeof globalThis.__FUNPAY_CLIENT__.setProxyUrl === 'function') {
+        await globalThis.__FUNPAY_CLIENT__.setProxyUrl(nextProxy);
+      }
+      sessions.delete(ctx.from.id);
+      return ctx.reply('FunPay proxy updated successfully and applied. Use /settings to verify it.', mainMenu());
+    } catch (err) {
+      return ctx.reply(uiError('update FunPay proxy', err, 'Failed to update FunPay proxy. Please try again.'));
     }
   }
 

@@ -123,6 +123,11 @@ export function parseLotId(html, logger = console) {
         continue;
       }
 
+      const isOrderOrChatPage = /\/(?:orders?|chats?)(?:\/|$)/i.test(url.pathname);
+      if (isOrderOrChatPage) {
+        continue;
+      }
+
       const queryId = ['offer_id', 'lot_id', 'offerId', 'lotId', 'id']
         .find((key) => url.searchParams.has(key) && !/\/(?:orders?|chats?)(?:\/)?$/i.test(url.pathname));
       if (queryId) {
@@ -148,7 +153,7 @@ export function parseLotId(html, logger = console) {
         return Number(pathMatch[1]);
       }
 
-      if (/(?:\/)(?:offer|lot|product|lots)(?:\/|$)/i.test(url.pathname) || /(?:\/)(?:orders?|chats?)(?:\/|$)/i.test(url.pathname)) {
+      if (/(?:\/)(?:offer|lot|product|lots)(?:\/|$)/i.test(url.pathname)) {
         const numericPart = url.pathname.match(/\d+/);
         if (numericPart) {
           return Number(numericPart[0]);

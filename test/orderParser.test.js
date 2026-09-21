@@ -240,8 +240,10 @@ test('extracts FunPay order id from order and chat URLs without treating them as
   assert.equal(parseFunpayOrderIdFromUrl('https://funpay.com/orders/123456/'), 123456);
   assert.equal(parseFunpayOrderIdFromUrl('https://funpay.com/order/123456/'), 123456);
   assert.equal(parseFunpayOrderIdFromUrl('https://funpay.com/chats/123456/'), 123456);
+  assert.equal(parseFunpayOrderIdFromUrl('https://funpay.com/orders/LHJBDGCA/'), 'LHJBDGCA');
   assert.equal(parseFunpayOrderIdFromUrl('https://funpay.com/posts/123456/'), null);
   assert.equal(parseLotId('https://funpay.com/orders/123456/'), null);
+  assert.equal(parseLotId('https://funpay.com/orders/LHJBDGCA/'), null);
   assert.equal(parseLotId('https://funpay.com/chats/123456/'), null);
 });
 
@@ -293,9 +295,9 @@ test('ignores incidental short numeric ids without a canonical FunPay offer URL'
   assert.equal(parseLotId('<a href="https://example.com?id=4"></a>'), null);
 });
 
-test('throws on malformed FunPay offer URLs instead of silently returning null', () => {
+test('ignores order pages and still throws on malformed offer URLs', () => {
   assert.doesNotThrow(() => parseLotId('<div>No FunPay offer here</div>'));
-  assert.throws(() => parseLotId('https://funpay.com/orders/not-a-valid-offer-id/'), /FunPay|offer/i);
+  assert.equal(parseLotId('https://funpay.com/orders/not-a-valid-offer-id/'), null);
   assert.throws(() => parseLotId('<a href="https://funpay.com/lots/offer?offer_id=abc"></a>'), /FunPay|offer/i);
 });
 

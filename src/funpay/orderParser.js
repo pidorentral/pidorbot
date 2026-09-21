@@ -36,14 +36,22 @@ export function parseFunpayOrderIdFromUrl(rawUrl) {
 
   try {
     const url = new URL(normalized);
-    const orderPathMatch = url.pathname.match(/\/(?:orders?|chats?)\/(\d+)(?:\/)?$/i);
-    if (orderPathMatch) return Number(orderPathMatch[1]);
+    const orderPathMatch = url.pathname.match(/\/(?:orders?|chats?)\/([^/?#]+)(?:\/)?$/i);
+    if (orderPathMatch) {
+      const value = orderPathMatch[1].trim();
+      if (!value) return null;
+      const numeric = Number(value);
+      return Number.isSafeInteger(numeric) && numeric > 0 ? numeric : value;
+    }
 
     if (/\/(?:orders?|chats?)(?:\/)?$/i.test(url.pathname)) {
       const orderIdFromQuery = ['id', 'order_id', 'orderId'].find((key) => url.searchParams.has(key));
       if (orderIdFromQuery) {
-        const value = Number(url.searchParams.get(orderIdFromQuery));
-        if (Number.isSafeInteger(value) && value > 0) return value;
+        const rawValue = String(url.searchParams.get(orderIdFromQuery) ?? '').trim();
+        if (!rawValue) return null;
+        const numeric = Number(rawValue);
+        if (/^\d+$/.test(rawValue) && Number.isSafeInteger(numeric) && numeric > 0) return numeric;
+        return rawValue;
       }
     }
 
@@ -77,8 +85,8 @@ export function parseLotId(html, logger = console) {
   if (input && /^https?:\/\//i.test(input)) {
     try {
       const url = new URL(input);
-      const orderPathMatch = url.pathname.match(/\/(?:orders?|chats?)\/(\d+)(?:\/)?$/i);
-      if (orderPathMatch) {
+      const isOrderPage = /\/(?:orders?|chats?)(?:\/|$)/i.test(url.pathname);
+      if (isOrderPage) {
         return null;
       }
 

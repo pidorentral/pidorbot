@@ -298,6 +298,8 @@ test('ignores incidental short numeric ids without a canonical FunPay offer URL'
 test('ignores order pages and still throws on malformed offer URLs', () => {
   assert.doesNotThrow(() => parseLotId('<div>No FunPay offer here</div>'));
   assert.equal(parseLotId('https://funpay.com/orders/not-a-valid-offer-id/'), null);
+  assert.equal(parseLotId('https://funpay.com/chat/'), null);
+  assert.equal(parseLotId('<a href="https://funpay.com/chat/"></a>'), null);
   assert.throws(() => parseLotId('<a href="https://funpay.com/lots/offer?offer_id=abc"></a>'), /FunPay|offer/i);
 });
 

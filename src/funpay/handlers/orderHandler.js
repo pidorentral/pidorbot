@@ -75,6 +75,28 @@ async function getOfferBindingAudit(offerId) {
   }
 }
 
+export function buildOfferAuditSummary({ funpayOrderId, effectiveLotId, accountId = null, bindingAudit = [] } = {}) {
+  const offerId = effectiveLotId == null ? 'unknown' : String(effectiveLotId);
+  const auditRows = Array.isArray(bindingAudit) ? bindingAudit.filter(Boolean) : [];
+  const rows = auditRows.length ? auditRows.slice(0, 5).map((row) => {
+    const account = row.accountId ?? 'n/a';
+    const offer = row.offerId ?? 'n/a';
+    const hours = row.hoursPerLot ?? 'n/a';
+    const isActive = row.isActive === false ? 'inactive' : 'active';
+    return `account #${account}: offer ${offer} (${hours}h/lot, ${isActive})`;
+  }) : ['no matching offer bindings in DB'];
+
+  const accountText = Number.isSafeInteger(accountId) && accountId > 0 ? `account #${accountId}` : 'the account';
+  const rowText = rows.join('; ');
+
+  return [
+    `Order #${funpayOrderId ?? 'unknown'}: offer ${offerId} is not bound to ${accountText}.`,
+    'Exact match policy: the system validates funpay_offer_id only, not the selected lot count or URL text.',
+    `DB audit: ${rowText}.`,
+    'This means the order resolved to a real offer ID, but the active binding for that exact offer is missing or inactive.',
+  ].join(' ');
+}
+
 function buildOfferAuditContext({ funpayOrderId, buyer, buyerId, price, resolvedLotId, effectiveLotId, selectedLotsCount, bindingAudit }) {
   return {
     funpayOrderId,
@@ -149,7 +171,11 @@ async function processOrder(order, { client, logger, notifyAdmin }) {
       selectedLotsCount,
       bindingAudit,
     });
-    const message = `⚠️ Заказ #${funpayOrderId}: для оффера ${effectiveLotId} не настроено корректное базовое количество часов — выдача остановлена.`;
+    const message = buildOfferAuditSummary({
+      funpayOrderId,
+      effectiveLotId,
+      bindingAudit,
+    });
     logger.error(`${message} | offerAudit=${JSON.stringify(auditContext)}`);
     if (notifyAdmin) await notifyAdmin(`${message} | offerAudit=${JSON.stringify(auditContext)}`);
     return false;
@@ -182,9 +208,15 @@ async function processOrder(order, { client, logger, notifyAdmin }) {
   if (existingActiveRental) {
     const offer = await getActiveAccountOffer(existingActiveRental.accountId, effectiveLotId);
     if (!offer) {
-      const message = `⚠️ Заказ #${funpayOrderId}: оффер ${effectiveLotId} не привязан к активному аккаунту #${existingActiveRental.accountId}; выдача остановлена.`;
-      logger.error(message);
-      if (notifyAdmin) await notifyAdmin(message);
+      const bindingAudit = await getOfferBindingAudit(effectiveLotId);
+      const message = buildOfferAuditSummary({
+        funpayOrderId,
+        effectiveLotId,
+        accountId: existingActiveRental.accountId,
+        bindingAudit,
+      });
+      logger.error(`${message} | activeRentalAccount=${existingActiveRental.accountId}`);
+      if (notifyAdmin) await notifyAdmin(`${message} | activeRentalAccount=${existingActiveRental.accountId}`);
       return false;
     }
     const offerBaseHours = Number(offer.hoursPerLot);

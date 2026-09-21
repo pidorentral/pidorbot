@@ -275,6 +275,18 @@ test('prefers the full offer id over an internal lot id', () => {
   );
 });
 
+test('prefers the real offer url over an internal trade-row lot id', () => {
+  const html = `
+    <div class="tc-item info">
+      <div class="tc-order">#JTXBW7EN</div>
+      <a href="https://funpay.com/lots/offer?id=77733347"></a>
+      <div data-lot-id="7"></div>
+    </div>
+  `;
+
+  assert.equal(parseLotId(html), 77733347);
+});
+
 test('throws on malformed FunPay offer URLs instead of silently returning null', () => {
   assert.doesNotThrow(() => parseLotId('<div>No FunPay offer here</div>'));
   assert.throws(() => parseLotId('https://funpay.com/orders/not-a-valid-offer-id/'), /FunPay|offer/i);

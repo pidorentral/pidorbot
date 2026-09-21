@@ -128,8 +128,13 @@ export function parseLotId(html, logger = console) {
         continue;
       }
 
-      const queryId = ['offer_id', 'lot_id', 'offerId', 'lotId', 'id']
-        .find((key) => url.searchParams.has(key) && !/\/(?:orders?|chats?)(?:\/)?$/i.test(url.pathname));
+      const pathLooksLikeOffer = /(?:\/lots\/\w+|\/offer\/|\/lot\/|\/product\/)/i.test(url.pathname);
+      const explicitOfferKeys = ['offer_id', 'lot_id', 'offerId', 'lotId'];
+      const explicitOfferKey = explicitOfferKeys.find((key) => url.searchParams.has(key));
+      const canonicalOfferQueryPath = /\/lots\/(?:offer|lot)\b/i.test(url.pathname);
+      const genericQueryId = !explicitOfferKey && canonicalOfferQueryPath && url.searchParams.has('id') ? 'id' : null;
+      const queryId = explicitOfferKey || genericQueryId;
+
       if (queryId) {
         const rawValue = String(url.searchParams.get(queryId) ?? '').trim();
         if (!/^\d+$/.test(rawValue)) {
@@ -138,8 +143,7 @@ export function parseLotId(html, logger = console) {
           throw new Error(message);
         }
 
-        const pathLooksLikeOffer = /(?:\/lots\/\w+|\/offer\/|\/lot\/|\/product\/)/i.test(url.pathname);
-        const isExplicitOfferKey = ['offer_id', 'lot_id', 'offerId', 'lotId'].includes(queryId);
+        const isExplicitOfferKey = explicitOfferKeys.includes(queryId);
         if (!isExplicitOfferKey && !pathLooksLikeOffer && rawValue.length < 5) {
           logger?.debug?.(`Ignoring short incidental numeric id in URL: ${url.toString()}`);
           continue;

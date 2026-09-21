@@ -300,6 +300,9 @@ test('ignores order pages and still throws on malformed offer URLs', () => {
   assert.equal(parseLotId('https://funpay.com/orders/not-a-valid-offer-id/'), null);
   assert.equal(parseLotId('https://funpay.com/chat/'), null);
   assert.equal(parseLotId('<a href="https://funpay.com/chat/"></a>'), null);
+  assert.equal(parseLotId('<a href="https://funpay.com/chat/?node=276018342"></a>'), null);
+  assert.equal(parseLotId('<a href="https://funpay.com/other?id=81"></a>'), null);
+  assert.equal(parseLotId('<a href="https://funpay.com/lots/offer?id=81"></a>'), 81);
   assert.throws(() => parseLotId('<a href="https://funpay.com/lots/offer?offer_id=abc"></a>'), /FunPay|offer/i);
 });
 

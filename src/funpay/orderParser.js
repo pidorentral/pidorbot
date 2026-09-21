@@ -58,6 +58,20 @@ function parseNumericValue(value) {
   return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
 }
 
+function isLikelyCanonicalOfferId(rawValue, { url, decoded = '' } = {}) {
+  if (typeof rawValue !== 'string') return false;
+
+  const trimmed = rawValue.trim();
+  if (!/^\d+$/.test(trimmed)) return false;
+
+  const hasExplicitOfferPattern = /(?:\/lots\/\w+|\/offer\/|\/lot\/|\/product\/|offer_id=|lot_id=|data-.*offer-id)/i.test(decoded || '');
+  const pathLooksLikeOffer = Boolean(url && /(?:\/lots\/\w+|\/offer\/|\/lot\/|\/product\/)/i.test(url.pathname));
+
+  if (pathLooksLikeOffer) return true;
+  if (hasExplicitOfferPattern) return trimmed.length >= 5;
+  return trimmed.length >= 5;
+}
+
 export function parseLotId(html, logger = console) {
   const input = String(html || '').trim();
   if (input && /^https?:\/\//i.test(input)) {
@@ -110,6 +124,14 @@ export function parseLotId(html, logger = console) {
           logger?.error?.(message);
           throw new Error(message);
         }
+
+        const pathLooksLikeOffer = /(?:\/lots\/\w+|\/offer\/|\/lot\/|\/product\/)/i.test(url.pathname);
+        const isExplicitOfferKey = ['offer_id', 'lot_id', 'offerId', 'lotId'].includes(queryId);
+        if (!isExplicitOfferKey && !pathLooksLikeOffer && rawValue.length < 5) {
+          logger?.debug?.(`Ignoring short incidental numeric id in URL: ${url.toString()}`);
+          continue;
+        }
+
         return Number(rawValue);
       }
 
@@ -157,11 +179,17 @@ export function parseLotId(html, logger = console) {
         logger?.error?.(message);
         throw new Error(message);
       }
+
+      if (!isLikelyCanonicalOfferId(rawValue, { decoded })) {
+        logger?.debug?.(`Ignoring short incidental numeric id in markup: ${rawValue}`);
+        continue;
+      }
+
       return Number(rawValue);
     }
   }
 
-  const containsOfferPatternMarker = /(\/lots\/(?:offer|lot)|\/offer\/|\/lot\/|\/product\/|offer_id=|lot_id=|data-.*offer-id)/i.test(decoded);
+  const containsOfferPatternMarker = /(\/lots\/(?:offer|lot)|\/offer\/|\/lot\/|\/product\/|offer_id=|lot_id=)/i.test(decoded);
   if (containsOfferPatternMarker) {
     const message = `Malformed FunPay offer markup: ${String(html || '').slice(0, 500).replace(/\s+/g, ' ').trim()}`;
     logger?.error?.(message);

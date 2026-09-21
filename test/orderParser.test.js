@@ -287,6 +287,12 @@ test('prefers the real offer url over an internal trade-row lot id', () => {
   assert.equal(parseLotId(html), 77733347);
 });
 
+test('ignores incidental short numeric ids without a canonical FunPay offer URL', () => {
+  assert.equal(parseLotId('<div data-offer-id="4"></div>'), null);
+  assert.equal(parseLotId('<div data-lot-id="7"></div>'), null);
+  assert.equal(parseLotId('<a href="https://example.com?id=4"></a>'), null);
+});
+
 test('throws on malformed FunPay offer URLs instead of silently returning null', () => {
   assert.doesNotThrow(() => parseLotId('<div>No FunPay offer here</div>'));
   assert.throws(() => parseLotId('https://funpay.com/orders/not-a-valid-offer-id/'), /FunPay|offer/i);

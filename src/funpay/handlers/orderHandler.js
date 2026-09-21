@@ -146,9 +146,11 @@ async function processOrder(order, { client, logger, notifyAdmin }) {
   try {
     effectiveLotId = normalizeOfferId(resolvedLotId, { funpayOrderId, logger, notifyAdmin });
   } catch (error) {
-    logger.error(`${error.message} | debug: buyer=${buyer || 'unknown'}, buyerId=${buyerId ?? 'n/a'}, orderPayload=${JSON.stringify({ funpayOrderId, buyer, buyerId, price })}`);
+    logger.error(`${error.message} | debug: buyer=${buyer || 'unknown'}, buyerId=${buyerId ?? 'n/a'}, orderPayload=${JSON.stringify({ funpayOrderId, buyer, buyerId, price, rawLotId: lotId ?? null, resolvedLotId: resolvedLotId ?? null, rawSelectedLotsCount: parsedSelectedLotsCount ?? null, resolvedSelectedLotsCount: resolvedSelectedLotsCount ?? null })}`);
     return false;
   }
+
+  logger.info(`Order #${funpayOrderId}: offer resolution debug: rawLotId=${lotId ?? 'n/a'}, resolvedLotId=${resolvedLotId ?? 'n/a'}, effectiveLotId=${effectiveLotId}, rawSelectedLotsCount=${parsedSelectedLotsCount ?? 'n/a'}, resolvedSelectedLotsCount=${resolvedSelectedLotsCount ?? 'n/a'}`);
   const parsedLotsCount = Number(resolvedSelectedLotsCount);
   const selectedLotsCount = Number.isSafeInteger(parsedLotsCount) && parsedLotsCount > 0
     ? parsedLotsCount
@@ -176,7 +178,7 @@ async function processOrder(order, { client, logger, notifyAdmin }) {
       effectiveLotId,
       bindingAudit,
     });
-    logger.error(`${message} | offerAudit=${JSON.stringify(auditContext)}`);
+    logger.error(`${message} | offerAudit=${JSON.stringify(auditContext)} | resolvedLotId=${resolvedLotId ?? 'n/a'} | rawLotId=${lotId ?? 'n/a'} | selectedLotsCount=${selectedLotsCount}`);
     if (notifyAdmin) await notifyAdmin(`${message} | offerAudit=${JSON.stringify(auditContext)}`);
     return false;
   }

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { parseFunpayOrderIdFromUrl, parseLotId, parseNewOrders, parseSelectedLotsCount } from '../src/funpay/orderParser.js';
+import { normalizeSelectedLotsCount } from '../src/funpay/handlers/orderHandler.js';
 
 test('parses new FunPay orders from trade page markup', () => {
   const html = `
@@ -210,6 +211,50 @@ test('parses lot id from data-href lots/offer?id= URL format', () => {
   }]);
 });
 
+test('prefers the real offer id from offer edit URLs instead of the internal node id', () => {
+  const html = `
+    <div class="tc-item info">
+      <div class="tc-order">#EDIT-URL</div>
+      <a href="https://funpay.com/lots/offerEdit?node=81&offer=77733347"></a>
+      <div class="media-user-name">buyer_name</div>
+      <div class="tc-price">1 200 ₽</div>
+      <div class="tc-status">Paid</div>
+      <div class="order-desc">Steam account</div>
+      <div class="tc-date-time">today</div>
+    </div>
+  `;
+
+  assert.deepEqual(parseNewOrders(html), [{
+    funpayOrderId: 'EDIT-URL',
+    buyerId: null,
+    buyerUsername: 'buyer_name',
+    price: 1200,
+    status: 'Paid',
+    description: 'Steam account',
+    lotId: 77733347,
+    selectedLotsCount: null,
+    createdLabel: 'today',
+  }]);
+});
+
+test('prefers the offer parameter over node when parsing offer edit URLs', () => {
+  assert.equal(parseLotId('<a href="https://funpay.com/lots/offerEdit?node=81&offer=77733347"></a>'), 77733347);
+  assert.equal(parseLotId('<a href="https://funpay.com/lots/offerEdit?node=81&id=77733347"></a>'), 77733347);
+});
+
+test('ignores unrelated generic ids before a real offerEdit offer id in mixed markup', () => {
+  const html = `
+    <a href="https://funpay.com/other?id=81"></a>
+    <a href="https://funpay.com/lots/offerEdit?node=81&offer=77733347"></a>
+  `;
+  assert.equal(parseLotId(html), 77733347);
+});
+
+test('extracts selected lots count from the real FunPay quantity label markup', () => {
+  assert.equal(parseSelectedLotsCount('<div>Количество: <span>2</span></div>'), 2);
+  assert.equal(parseSelectedLotsCount('<div class="param-item"><h5>Количество</h5><div class="text-bold">4 шт.</div></div>'), 4);
+});
+
 test('ignores unrelated numeric values when there is no valid lot id', () => {
   const html = `
     <div class="tc-item info">
@@ -305,6 +350,17 @@ test('ignores order pages and still throws on malformed offer URLs', () => {
   assert.equal(parseLotId('<a href="https://funpay.com/lots/offer?id=81"></a>'), null);
   assert.equal(parseLotId('<a href="https://funpay.com/lots/offer?id=77733347"></a>'), 77733347);
   assert.throws(() => parseLotId('<a href="https://funpay.com/lots/offer?offer_id=abc"></a>'), /FunPay|offer/i);
+});
+
+test('uses a single lot fallback when FunPay omits the selected-lots count', () => {
+  const warnLogs = [];
+  assert.equal(normalizeSelectedLotsCount(null, {
+    funpayOrderId: 'TEST-42',
+    effectiveLotId: '77733347',
+    logger: { warn: (message) => warnLogs.push(message) },
+  }), 1);
+  assert.equal(warnLogs.length, 1);
+  assert.match(warnLogs[0], /используем 1 по умолчанию/i);
 });
 
 test('ignores items without an order number', () => {

@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import {
     getAccountById,
     getOrderByFunpayId,
@@ -97,6 +98,18 @@ export function buildOfferAuditSummary({ funpayOrderId, effectiveLotId, accountI
   ].join(' ');
 }
 
+export function normalizeSelectedLotsCount(value, { funpayOrderId, effectiveLotId, logger } = {}) {
+  const parsed = Number(value);
+  if (Number.isSafeInteger(parsed) && parsed > 0) {
+    return parsed;
+  }
+
+  const orderText = funpayOrderId ? ` для заказа ${funpayOrderId}` : '';
+  const offerText = effectiveLotId ? ` (offer_id=${effectiveLotId})` : '';
+  logger?.warn?.(`Не удалось определить selectedLotsCount${orderText}${offerText}, используем 1 по умолчанию`);
+  return 1;
+}
+
 function buildOfferAuditContext({ funpayOrderId, buyer, buyerId, price, resolvedLotId, effectiveLotId, selectedLotsCount, bindingAudit }) {
   return {
     funpayOrderId,
@@ -128,7 +141,13 @@ async function processOrder(order, { client, logger, notifyAdmin }) {
     logger.warn(`Order #${funpayOrderId}: incomplete trade-row metadata; trying detail-page fallback`);
     for (const path of [`orders/${encodeURIComponent(funpayOrderId)}/`, `order/${encodeURIComponent(funpayOrderId)}/`, `chats/${encodeURIComponent(funpayOrderId)}/`]) {
       try {
+        const detailUrl = `https://funpay.com/${path}`;
         const detailHtml = await client.request(path);
+
+        // Temporary debug dump: capture the exact URL and raw HTML seen by the parser.
+        fs.writeFileSync('debug_url.txt', `${detailUrl}\n`, 'utf8');
+        fs.writeFileSync('debug_order.html', String(detailHtml || ''), 'utf8');
+
         const detailLotId = parseLotId(detailHtml, logger);
         const detailSelectedLotsCount = parseSelectedLotsCount(detailHtml);
         if (detailLotId) {
@@ -151,13 +170,7 @@ async function processOrder(order, { client, logger, notifyAdmin }) {
   }
 
   logger.info(`Order #${funpayOrderId}: offer resolution debug: rawLotId=${lotId ?? 'n/a'}, resolvedLotId=${resolvedLotId ?? 'n/a'}, effectiveLotId=${effectiveLotId}, rawSelectedLotsCount=${parsedSelectedLotsCount ?? 'n/a'}, resolvedSelectedLotsCount=${resolvedSelectedLotsCount ?? 'n/a'}`);
-  const parsedLotsCount = Number(resolvedSelectedLotsCount);
-  const selectedLotsCount = Number.isSafeInteger(parsedLotsCount) && parsedLotsCount > 0
-    ? parsedLotsCount
-    : 1;
-  if (selectedLotsCount === 1 && !(Number.isSafeInteger(parsedLotsCount) && parsedLotsCount > 0)) {
-    logger.warn(`Не удалось определить selectedLotsCount для заказа ${funpayOrderId} (offer_id=${effectiveLotId}), используем 1 по умолчанию`);
-  }
+  const selectedLotsCount = normalizeSelectedLotsCount(resolvedSelectedLotsCount, { funpayOrderId, effectiveLotId, logger });
 
   // Fail before inserting an order when this offer has no valid base duration.
   const configuredBaseHours = await getOfferBaseHours(effectiveLotId);

@@ -72,6 +72,45 @@ function isCanonicalOfferCandidate(rawValue) {
   return /^\d+$/.test(trimmed) && trimmed.length >= 5;
 }
 
+function extractCanonicalOfferIdFromSearchParams(url, logger = console) {
+  const canonicalPath = /(?:\/lots\/(?:offer|lot)|\/lots\/offerEdit\b|\/offer(?:\/|$)|\/lot(?:\/|$)|\/product(?:\/|$))/i.test(url.pathname);
+  if (!canonicalPath) {
+    return null;
+  }
+
+  const preferredKeys = ['offer', 'id', 'offer_id', 'lot_id', 'offerId', 'lotId'];
+
+  for (const key of preferredKeys) {
+    if (!url.searchParams.has(key)) continue;
+
+    if (key === 'id' && !/\/lots\/(?:offer|lot)\b/i.test(url.pathname) && !/\/lots\/offerEdit\b/i.test(url.pathname)) {
+      continue;
+    }
+
+    const rawValue = String(url.searchParams.get(key) ?? '').trim();
+    if (!/^\d+$/.test(rawValue)) {
+      const message = `Invalid FunPay offer id in URL: ${url.toString()}`;
+      logger?.error?.(message);
+      throw new Error(message);
+    }
+
+    if (!isCanonicalOfferCandidate(rawValue)) {
+      logger?.debug?.(`Ignoring short incidental numeric id in URL: ${url.toString()}`);
+      return null;
+    }
+
+    // The canonical offer-edit URL carries an internal node id and the true offer id in `offer`.
+    // Always prefer `offer`/`id` when the path is a known offer route; ignore generic `node` values.
+    if (key === 'id' && /\/lots\/offerEdit\b/i.test(url.pathname) && !/\boffer\b/i.test(url.searchParams.get('offer') ?? '')) {
+      return Number(rawValue);
+    }
+
+    return Number(rawValue);
+  }
+
+  return null;
+}
+
 function isLikelyCanonicalOfferId(rawValue, { url, decoded = '' } = {}) {
   if (typeof rawValue !== 'string') return false;
 
@@ -132,6 +171,16 @@ export function parseLotId(html, logger = console) {
 
       const isOrderOrChatPage = /\/(?:orders?|chats?)(?:\/|$)/i.test(url.pathname);
       if (isOrderOrChatPage) {
+        continue;
+      }
+
+      const canonicalOfferId = extractCanonicalOfferIdFromSearchParams(url, logger);
+      if (canonicalOfferId !== null) {
+        return canonicalOfferId;
+      }
+
+      if (/\/lots\/offerEdit\b/i.test(url.pathname)) {
+        logger?.debug?.(`Ignoring FunPay offer-edit URL without a canonical offer id: ${url.toString()}`);
         continue;
       }
 
@@ -221,8 +270,14 @@ export function parseLotId(html, logger = console) {
     }
   }
 
+  if (/\/lots\/offerEdit\b/i.test(decoded)) {
+    logger?.debug?.(`Ignoring FunPay offer-edit markup: ${String(html || '').slice(0, 300).replace(/\s+/g, ' ').trim()}`);
+    return null;
+  }
+
   const containsOfferPatternMarker = /(\/lots\/(?:offer|lot)|\/offer\/|\/lot\/|\/product\/|offer_id=|lot_id=)/i.test(decoded);
-  const hasOnlyShortNumericOfferId = /\/lots\/(?:offer|lot)\?(?:[^'"\s]*[&;])?id=(\d{1,4})(?:&|$|["'])/i.test(decoded);
+  const hasOnlyShortNumericOfferId = /\/lots\/(?:offer|lot)\?(?:[^'"<>]*[&;])?id=(\d{1,4})(?:\b|["'&<>])/i.test(decoded)
+    || /(?:\/offer\/|\/lot\/|\/product\/)(\d{1,4})(?:\/|\b|["'<>])/i.test(decoded);
   if (containsOfferPatternMarker && !hasOnlyShortNumericOfferId) {
     const message = `Malformed FunPay offer markup: ${String(html || '').slice(0, 500).replace(/\s+/g, ' ').trim()}`;
     logger?.error?.(message);
@@ -237,18 +292,23 @@ export function parseLotId(html, logger = console) {
 // stable data attributes or a labelled value from FunPay's order markup.
 export function parseSelectedLotsCount(html) {
   const source = String(html || '');
+
   const dataAttribute = source.match(
-    /\bdata-(?:selected-)?(?:lot(?:s)?-?count|quantity|qty)\s*=\s*(['"])(\d+)\1/i,
+    /\bdata-(?:selected-)?(?:lot(?:s)?-?count|lots|quantity|qty|amount)\s*=\s*(['"])(\d+)\1/i,
   );
   if (dataAttribute) return parseNumericValue(dataAttribute[2]);
 
-  // Handles markup such as "Количество: <span>3</span>" without depending on
-  // generated CSS class names. Do not inspect order-desc: its title may contain
-  // unrelated numbers (hours, rating, or #1).
-  const labelledValue = source.match(
-    /(?:Количество|Кол(?:-?во)?|Quantity|Lots?)\s*(?:<[^>]*>\s*){0,3}[:：]?\s*(?:<[^>]*>\s*){0,3}(\d+)\b/iu,
+  const quantityByLabel = source.match(
+    /(?:Количество|Кол(?:-?во)?|Quantity|Lots?|Шт(?:\.|\b)|шт(?:\.|\b))\s*(?:<[^>]*>\s*){0,3}[:：]?\s*(?:<[^>]*>\s*){0,3}(\d+)\b/iu,
   );
-  return labelledValue ? parseNumericValue(labelledValue[1]) : null;
+  if (quantityByLabel) return parseNumericValue(quantityByLabel[1]);
+
+  const quantityInTextBlock = source.match(
+    /(?:Количество|Кол(?:-?во)?|Quantity|Lots?)\s*[:：]?\s*<[^>]*>\s*(\d+)\s*(?:шт|шт\.|шт\b|лотов?|lots?)?/iu,
+  );
+  if (quantityInTextBlock) return parseNumericValue(quantityInTextBlock[1]);
+
+  return null;
 }
 
 function parsePrice(text) {
